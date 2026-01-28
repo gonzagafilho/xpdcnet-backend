@@ -2,53 +2,29 @@ const User = require('../models/User');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 
+const { registerUser } = require('../services/authService');
+
 /**
  * REGISTER
- * Criação de usuário
+ * Criação de usuário (delegado ao service)
  */
 exports.register = async (req, res) => {
   try {
-    const { name, email, password } = req.body;
-
-    // validação básica
-    if (!name || !email || !password) {
-      return res.status(400).json({
-        message: 'Preencha todos os campos'
-      });
-    }
-
-    // verifica se já existe
-    const userExists = await User.findOne({ email });
-    if (userExists) {
-      return res.status(400).json({
-        message: 'Usuário já cadastrado'
-      });
-    }
-
-    // 🔐 criptografia da senha
-    const salt = await bcrypt.genSalt(10);
-    const hashedPassword = await bcrypt.hash(password, salt);
-
-    // cria usuário
-    const user = await User.create({
-      name,
-      email,
-      password: hashedPassword
-    });
+    const result = await registerUser(req.body);
 
     return res.status(201).json({
       message: 'Usuário criado com sucesso',
       user: {
-        id: user._id,
-        name: user.name,
-        email: user.email,
-        role: user.role
+        id: result.user._id,
+        name: result.user.name,
+        email: result.user.email,
+        role: result.user.role
       }
     });
   } catch (error) {
     console.error('Erro no register:', error);
     return res.status(500).json({
-      message: 'Erro interno do servidor'
+      message: error.message || 'Erro interno do servidor'
     });
   }
 };
@@ -56,6 +32,7 @@ exports.register = async (req, res) => {
 /**
  * LOGIN
  * Autenticação com JWT
+ * (mantido exatamente como estava)
  */
 exports.login = async (req, res) => {
   try {
@@ -115,6 +92,7 @@ exports.login = async (req, res) => {
 /**
  * ME
  * Retorna dados do usuário autenticado
+ * (mantido exatamente como estava)
  */
 exports.me = async (req, res) => {
   try {
@@ -136,3 +114,4 @@ exports.me = async (req, res) => {
     });
   }
 };
+
