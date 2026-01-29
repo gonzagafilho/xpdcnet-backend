@@ -1,38 +1,16 @@
-const userService = require('../services/userService');
-const { ok, noContent } = require('../utils/response');
+const express = require('express');
+const router = express.Router();
 
-exports.listUsers = async (req, res, next) => {
-  try {
-    const users = await userService.listUsers();
-    return ok(res, 'Lista de usuários', users);
-  } catch (err) {
-    return next(err);
-  }
-};
+const userController = require('../controllers/userController');
+const authMiddleware = require('../middlewares/authMiddleware');
+const isAdmin = require('../middlewares/isAdmin');
 
-exports.getUser = async (req, res, next) => {
-  try {
-    const user = await userService.getUserById(req.params.id);
-    return ok(res, 'Usuário encontrado', user);
-  } catch (err) {
-    return next(err);
-  }
-};
+router.use(authMiddleware);
+router.use(isAdmin);
 
-exports.updateUser = async (req, res, next) => {
-  try {
-    const user = await userService.updateUser(req.params.id, req.body);
-    return ok(res, 'Usuário atualizado', user);
-  } catch (err) {
-    return next(err);
-  }
-};
+router.get('/', userController.listUsers);
+router.get('/:id', userController.getUser);
+router.put('/:id', userController.updateUser);
+router.delete('/:id', userController.deleteUser);
 
-exports.deleteUser = async (req, res, next) => {
-  try {
-    await userService.deleteUser(req.params.id);
-    return noContent(res);
-  } catch (err) {
-    return next(err);
-  }
-};
+module.exports = router;
