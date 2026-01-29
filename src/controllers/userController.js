@@ -1,79 +1,38 @@
-const User = require('../models/User');
+const userService = require('../services/userService');
+const { ok, noContent } = require('../utils/response');
 
-/**
- * LISTAR USUÁRIOS
- */
-exports.listUsers = async (req, res) => {
+exports.listUsers = async (req, res, next) => {
   try {
-    const users = await User.find().select('-password');
-    return res.status(200).json({ users });
-  } catch (error) {
-    console.error('Erro ao listar usuários:', error);
-    return res.status(500).json({ message: 'Erro interno do servidor' });
+    const users = await userService.listUsers();
+    return ok(res, 'Lista de usuários', users);
+  } catch (err) {
+    return next(err);
   }
 };
 
-/**
- * BUSCAR USUÁRIO POR ID
- */
-exports.getUserById = async (req, res) => {
+exports.getUser = async (req, res, next) => {
   try {
-    const user = await User.findById(req.params.id).select('-password');
-
-    if (!user) {
-      return res.status(404).json({ message: 'Usuário não encontrado' });
-    }
-
-    return res.status(200).json({ user });
-  } catch (error) {
-    console.error('Erro ao buscar usuário:', error);
-    return res.status(500).json({ message: 'Erro interno do servidor' });
+    const user = await userService.getUserById(req.params.id);
+    return ok(res, 'Usuário encontrado', user);
+  } catch (err) {
+    return next(err);
   }
 };
 
-/**
- * ATUALIZAR USUÁRIO
- */
-exports.updateUser = async (req, res) => {
+exports.updateUser = async (req, res, next) => {
   try {
-    const { name, role, isActive } = req.body;
-
-    const user = await User.findByIdAndUpdate(
-      req.params.id,
-      { name, role, isActive },
-      { new: true }
-    ).select('-password');
-
-    if (!user) {
-      return res.status(404).json({ message: 'Usuário não encontrado' });
-    }
-
-    return res.status(200).json({
-      message: 'Usuário atualizado com sucesso',
-      user
-    });
-  } catch (error) {
-    console.error('Erro ao atualizar usuário:', error);
-    return res.status(500).json({ message: 'Erro interno do servidor' });
+    const user = await userService.updateUser(req.params.id, req.body);
+    return ok(res, 'Usuário atualizado', user);
+  } catch (err) {
+    return next(err);
   }
 };
 
-/**
- * REMOVER USUÁRIO
- */
-exports.deleteUser = async (req, res) => {
+exports.deleteUser = async (req, res, next) => {
   try {
-    const user = await User.findByIdAndDelete(req.params.id);
-
-    if (!user) {
-      return res.status(404).json({ message: 'Usuário não encontrado' });
-    }
-
-    return res.status(200).json({
-      message: 'Usuário removido com sucesso'
-    });
-  } catch (error) {
-    console.error('Erro ao remover usuário:', error);
-    return res.status(500).json({ message: 'Erro interno do servidor' });
+    await userService.deleteUser(req.params.id);
+    return noContent(res);
+  } catch (err) {
+    return next(err);
   }
 };
