@@ -1,117 +1,50 @@
-const User = require('../models/User');
-const bcrypt = require('bcryptjs');
-const jwt = require('jsonwebtoken');
-
-const { registerUser } = require('../services/authService');
+const authService = require('../services/authService');
+const { ok, created } = require('../utils/response');
 
 /**
  * REGISTER
  * Criação de usuário (delegado ao service)
  */
-exports.register = async (req, res) => {
+exports.register = async (req, res, next) => {
   try {
-    const result = await registerUser(req.body);
+    const result = await authService.register(req.body);
 
-    return res.status(201).json({
-      message: 'Usuário criado com sucesso',
-      user: {
-        id: result.user._id,
-        name: result.user.name,
-        email: result.user.email,
-        role: result.user.role
-      }
-    });
-  } catch (error) {
-    console.error('Erro no register:', error);
-    return res.status(500).json({
-      message: error.message || 'Erro interno do servidor'
-    });
+    return created(res, 'Usuário criado com sucesso', result);
+  } catch (err) {
+    return next(err);
   }
 };
 
 /**
  * LOGIN
- * Autenticação com JWT
- * (mantido exatamente como estava)
+ * Autenticação com JWT (delegado ao service)
  */
-exports.login = async (req, res) => {
+exports.login = async (req, res, next) => {
   try {
-    const { email, password } = req.body;
+    const result = await authService.login(req.body);
 
-    // validação
-    if (!email || !password) {
-      return res.status(400).json({
-        message: 'Email e senha são obrigatórios'
-      });
-    }
-
-    const user = await User.findOne({ email });
-    if (!user) {
-      return res.status(401).json({
-        message: 'Credenciais inválidas'
-      });
-    }
-
-    const passwordMatch = await bcrypt.compare(password, user.password);
-    if (!passwordMatch) {
-      return res.status(401).json({
-        message: 'Credenciais inválidas'
-      });
-    }
-
-    // 🔐 gera token JWT
-    const token = jwt.sign(
-      {
-        id: user._id,
-        role: user.role
-      },
-      process.env.JWT_SECRET,
-      {
-        expiresIn: process.env.JWT_EXPIRES_IN || '7d'
-      }
-    );
-
-    return res.status(200).json({
-      message: 'Login realizado com sucesso',
-      token,
-      user: {
-        id: user._id,
-        name: user.name,
-        email: user.email,
-        role: user.role
-      }
-    });
-  } catch (error) {
-    console.error('Erro no login:', error);
-    return res.status(500).json({
-      message: 'Erro interno do servidor'
-    });
+    return ok(res, 'Login realizado com sucesso', result);
+  } catch (err) {
+    return next(err);
   }
 };
 
 /**
  * ME
- * Retorna dados do usuário autenticado
- * (mantido exatamente como estava)
+ * Retorna dados do usuário autenticado (delegado ao service)
  */
-exports.me = async (req, res) => {
+exports.me = async (req, res, next) => {
   try {
-    const user = await User.findById(req.userId).select('-password');
+    // ✅ compatível com seu middleware atual:
+    const userId = req.userId;
 
-    if (!user) {
-      return res.status(404).json({
-        message: 'Usuário não encontrado'
-      });
-    }
+    // ✅ se você já atualizou o authMiddleware para req.user.id, use isso:
+    // const userId = req.user?.id;
 
-    return res.status(200).json({
-      user
-    });
-  } catch (error) {
-    console.error('Erro no /me:', error);
-    return res.status(500).json({
-      message: 'Erro interno do servidor'
-    });
+    const result = await authService.me({ userId });
+
+    return ok(res, 'Usuário autenticado', result);
+  } catch (err) {
+    return next(err);
   }
 };
-

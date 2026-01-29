@@ -1,40 +1,36 @@
 const jwt = require('jsonwebtoken');
+const ApiError = require('../utils/ApiError');
 
 module.exports = (req, res, next) => {
   const authHeader = req.headers.authorization;
 
   if (!authHeader) {
-    return res.status(401).json({
-      message: 'Token não fornecido'
-    });
+    throw new ApiError(401, 'Token não fornecido');
   }
 
   const parts = authHeader.split(' ');
 
   if (parts.length !== 2) {
-    return res.status(401).json({
-      message: 'Token mal formatado'
-    });
+    throw new ApiError(401, 'Token mal formatado');
   }
 
   const [scheme, token] = parts;
 
   if (!/^Bearer$/i.test(scheme)) {
-    return res.status(401).json({
-      message: 'Token mal formatado'
-    });
+    throw new ApiError(401, 'Token mal formatado');
   }
 
   try {
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
 
-    req.userId = decoded.id;
-    req.userRole = decoded.role;
+    // padrão único usado pelo sistema inteiro
+    req.user = {
+      id: decoded.id,
+      role: decoded.role,
+    };
 
     return next();
   } catch (error) {
-    return res.status(401).json({
-      message: 'Token inválido ou expirado'
-    });
+    throw new ApiError(401, 'Token inválido ou expirado');
   }
 };

@@ -4,16 +4,19 @@ require('dotenv').config();
 
 const authRoutes = require('./routes/authRoutes');
 const userRoutes = require('./routes/userRoutes');
+const errorHandler = require('./middlewares/errorHandler');
+
 const app = express();
 
-// middlewares
+/* ===== Middlewares ===== */
 app.use(cors());
 app.use(express.json());
 
-// rotas
+/* ===== Rotas ===== */
 app.use('/auth', authRoutes);
 app.use('/users', userRoutes);
-// health check
+
+/* ===== Health Check ===== */
 app.get('/health', (req, res) => {
   res.status(200).json({
     status: 'ok',
@@ -22,5 +25,7 @@ app.get('/health', (req, res) => {
   });
 });
 
-module.exports = app;
+/* ===== Middleware global de erro (SEMPRE O ÚLTIMO) ===== */
+app.use(errorHandler);
 
+module.exports = app;
