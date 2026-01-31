@@ -1,6 +1,9 @@
 const express = require('express');
 const cors = require('cors');
 
+const planRoutes = require('./routes/planRoutes');
+const clientRoutes = require('./routes/clientRoutes');
+
 const tenantMiddleware = require('./middlewares/tenantMiddleware');
 const errorHandler = require('./middlewares/errorHandler');
 
@@ -24,6 +27,9 @@ app.use('/auth', tenantMiddleware, authRoutes);
 
 // error handler por último
 app.use(errorHandler);
+
+app.use('/plans', planRoutes);
+app.use('/clients', clientRoutes);
 
 module.exports = app;
 
