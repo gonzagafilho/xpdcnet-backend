@@ -25,11 +25,11 @@ app.use('/tenants', tenantRoutes);
 // Rotas com tenant obrigatório
 app.use('/auth', tenantMiddleware, authRoutes);
 
-// error handler por último
-app.use(errorHandler);
-
 app.use('/plans', planRoutes);
 app.use('/clients', clientRoutes);
+
+// error handler por último
+app.use(errorHandler);
 
 module.exports = app;
 
