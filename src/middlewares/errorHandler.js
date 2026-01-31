@@ -1,32 +1,19 @@
-const ApiError = require('../utils/ApiError');
+const ApiError = require('../errors/ApiError');
 
 module.exports = (err, req, res, next) => {
-  // ✅ agora o err existe aqui dentro
-  console.error('[ERROR_HANDLER]', err);
-
-  if (res.headersSent) return next(err);
-
-  // Erro tratado (nosso padrão)
+  // erro esperado
   if (err instanceof ApiError) {
     return res.status(err.statusCode).json({
-      success: false,
       message: err.message,
-      ...(err.details ? { details: err.details } : {}),
+      details: err.details ?? null,
     });
   }
 
-  // Erro de validação do Mongoose
-  if (err?.name === 'ValidationError') {
-    return res.status(400).json({
-      success: false,
-      message: 'Erro de validação',
-      details: err.errors,
-    });
-  }
+  // erro do mongoose ou qualquer outro
+  console.error('[ERROR]', err);
 
-  // Erro inesperado
   return res.status(500).json({
-    success: false,
     message: 'Erro interno do servidor',
   });
 };
+

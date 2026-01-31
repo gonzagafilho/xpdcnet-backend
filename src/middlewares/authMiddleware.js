@@ -1,36 +1,16 @@
 const jwt = require('jsonwebtoken');
-const ApiError = require('../utils/ApiError');
+const ApiError = require('../errors/ApiError');
 
 module.exports = (req, res, next) => {
-  const authHeader = req.headers.authorization;
-
-  if (!authHeader) {
-    throw new ApiError(401, 'Token não fornecido');
-  }
-
-  const parts = authHeader.split(' ');
-
-  if (parts.length !== 2) {
-    throw new ApiError(401, 'Token mal formatado');
-  }
-
-  const [scheme, token] = parts;
-
-  if (!/^Bearer$/i.test(scheme)) {
-    throw new ApiError(401, 'Token mal formatado');
-  }
-
   try {
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    const header = req.headers.authorization || '';
+    const token = header.startsWith('Bearer ') ? header.slice(7) : null;
+    if (!token) return next(ApiError.unauthorized('Token ausente'));
 
-    // padrão único usado pelo sistema inteiro
-    req.user = {
-      id: decoded.id,
-      role: decoded.role,
-    };
-
-    return next();
-  } catch (error) {
-    throw new ApiError(401, 'Token inválido ou expirado');
+    const payload = jwt.verify(token, process.env.JWT_SECRET);
+    req.user = payload; // {sub, tenantId, roleId}
+    next();
+  } catch (err) {
+    return next(ApiError.unauthorized('Token inválido'));
   }
 };

@@ -1,31 +1,29 @@
 const express = require('express');
 const cors = require('cors');
-require('dotenv').config();
 
-const authRoutes = require('./routes/authRoutes');
-const userRoutes = require('./routes/userRoutes');
+const tenantMiddleware = require('./middlewares/tenantMiddleware');
 const errorHandler = require('./middlewares/errorHandler');
+
+const tenantRoutes = require('./routes/tenantRoutes');
+const authRoutes = require('./routes/authRoutes');
 
 const app = express();
 
-/* ===== Middlewares ===== */
 app.use(cors());
 app.use(express.json());
 
-/* ===== Rotas ===== */
-app.use('/auth', authRoutes);
-app.use('/users', userRoutes);
-
-/* ===== Health Check ===== */
 app.get('/health', (req, res) => {
-  res.status(200).json({
-    status: 'ok',
-    service: 'xpdcnet-api',
-    uptime: process.uptime()
-  });
+  res.json({ status: 'ok', service: 'xpdcnet-api' });
 });
 
-/* ===== Middleware global de erro (SEMPRE O ÚLTIMO) ===== */
+// Rotas SaaS admin (sem tenant)
+app.use('/tenants', tenantRoutes);
+
+// Rotas com tenant obrigatório
+app.use('/auth', tenantMiddleware, authRoutes);
+
+// error handler por último
 app.use(errorHandler);
 
 module.exports = app;
+

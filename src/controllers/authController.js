@@ -1,50 +1,22 @@
 const authService = require('../services/authService');
-const { ok, created } = require('../utils/response');
 
-/**
- * REGISTER
- * Criação de usuário (delegado ao service)
- */
-exports.register = async (req, res, next) => {
+exports.registerOwner = async (req, res, next) => {
   try {
-    const result = await authService.register(req.body);
-
-    return created(res, 'Usuário criado com sucesso', result);
+    // precisa do tenant resolvido
+    const tenantId = req.tenant._id.toString();
+    const user = await authService.registerOwner({ tenantId, ...req.body });
+    res.status(201).json({ id: user._id, email: user.email, name: user.name });
   } catch (err) {
-    return next(err);
+    next(err);
   }
 };
 
-/**
- * LOGIN
- * Autenticação com JWT (delegado ao service)
- */
 exports.login = async (req, res, next) => {
   try {
-    const result = await authService.login(req.body);
-
-    return ok(res, 'Login realizado com sucesso', result);
+    const tenantId = req.tenant._id.toString();
+    const result = await authService.login({ tenantId, ...req.body });
+    res.json(result);
   } catch (err) {
-    return next(err);
-  }
-};
-
-/**
- * ME
- * Retorna dados do usuário autenticado (delegado ao service)
- */
-exports.me = async (req, res, next) => {
-  try {
-    // ✅ compatível com seu middleware atual:
-    const userId = req.userId;
-
-    // ✅ se você já atualizou o authMiddleware para req.user.id, use isso:
-    // const userId = req.user?.id;
-
-    const result = await authService.me({ userId });
-
-    return ok(res, 'Usuário autenticado', result);
-  } catch (err) {
-    return next(err);
+    next(err);
   }
 };
