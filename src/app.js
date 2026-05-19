@@ -58,7 +58,7 @@ app.use('/agent', agentCompatRoutes);
 app.use('/system/health', tenantMiddleware, systemHealthRoutes);
 app.use('/billing', tenantMiddleware, billingRoutes);
 app.use('/operations', tenantMiddleware, operationsReadRoutes);
-app.use('/monitoring', tenantMiddleware, requireMikrotikCryptoConfigured, monitoringBoardRoutes);
+app.use('/monitoring', tenantMiddleware, monitoringBoardRoutes);
 
 // error handler por último
 app.use(errorHandler);
