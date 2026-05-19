@@ -100,6 +100,20 @@ exports.enqueueServerMonitoringCommand = async (params) => {
  */
 exports.claimNextPendingForNode = async (nodeId) => {
   if (!mongoose.Types.ObjectId.isValid(String(nodeId))) return null;
+  const maxInflightPerNode = Math.max(
+    1,
+    Number(process.env.REMOTE_AGENT_MAX_INFLIGHT_PER_NODE || 1),
+  );
+
+  const inflight = await RemoteAgentCommand.countDocuments({
+    networkNodeId: nodeId,
+    status: 'processing',
+  });
+
+  if (inflight >= maxInflightPerNode) {
+    return null;
+  }
+
 
   const cmd = await RemoteAgentCommand.findOneAndUpdate(
     {
