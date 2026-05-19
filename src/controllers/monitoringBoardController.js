@@ -115,3 +115,134 @@ exports.getQueueHealth = async (req, res, next) => {
     next(err);
   }
 };
+
+/** GET /monitoring/stream */
+exports.streamQueueHealth = async (req, res, next) => {
+  try {
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+
+    if (res.flushHeaders) {
+      res.flushHeaders();
+    }
+
+    const tenantId = req.tenant._id;
+
+    const sendSnapshot = async () => {
+      try {
+        const now = Date.now();
+
+        const staleBefore = new Date(
+          now - REMOTE_AGENT_PROCESSING_TIMEOUT_MS
+        );
+
+        const onlineSince = new Date(
+          now - AGENT_ONLINE_MS
+        );
+
+        const [
+          pending,
+          processing,
+          failed,
+          stale,
+          agentsTotal,
+          agentsOnline,
+          recentRecoveries,
+        ] = await Promise.all([
+          RemoteAgentCommand.countDocuments({
+            tenantId,
+            status: 'pending',
+          }),
+
+          RemoteAgentCommand.countDocuments({
+            tenantId,
+            status: 'processing',
+          }),
+
+          RemoteAgentCommand.countDocuments({
+            tenantId,
+            status: 'failed',
+          }),
+
+          RemoteAgentCommand.countDocuments({
+            tenantId,
+            status: 'processing',
+            lockedAt: { $lte: staleBefore },
+          }),
+
+          NetworkNode.countDocuments({
+            tenantId,
+            type: 'REMOTE_AGENT',
+          }),
+
+          NetworkNode.countDocuments({
+            tenantId,
+            type: 'REMOTE_AGENT',
+            agentLastSeenAt: { $gte: onlineSince },
+          }),
+
+          OperationLog.countDocuments({
+            tenantId,
+            action: {
+              $in: [
+                'remote_agent.command.requeued',
+                'remote_agent.command.deadletter',
+              ],
+            },
+            createdAt: {
+              $gte: new Date(now - 60 * 60 * 1000),
+            },
+          }),
+        ]);
+
+        const degraded =
+          stale > 0 ||
+          failed > 0 ||
+          (agentsTotal > 0 && agentsOnline === 0);
+
+        const payload = {
+          generatedAt: new Date().toISOString(),
+
+          status: degraded ? 'degraded' : 'ok',
+
+          agents: {
+            total: agentsTotal,
+            online: agentsOnline,
+            offline: Math.max(0, agentsTotal - agentsOnline),
+          },
+
+          queue: {
+            pending,
+            processing,
+            failed,
+            stale,
+          },
+
+          recovery: {
+            recentRecoveriesLastHour: recentRecoveries,
+          },
+        };
+
+        res.write(`data: ${JSON.stringify(payload)}\n\n`);
+      } catch (err) {
+        res.write(
+          `event: error\ndata: ${JSON.stringify({
+            message: err.message,
+          })}\n\n`
+        );
+      }
+    };
+
+    await sendSnapshot();
+
+    const interval = setInterval(sendSnapshot, 5000);
+
+    req.on('close', () => {
+      clearInterval(interval);
+    });
+
+  } catch (err) {
+    next(err);
+  }
+};
