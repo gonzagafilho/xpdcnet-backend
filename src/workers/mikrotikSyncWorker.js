@@ -29,6 +29,7 @@ const { pickExpectedSnapshot } = require('../services/mikrotikSyncAudit');
 const Client = require('../models/Client');
 const { scrubSecretsFromMessage } = require('../integrations/mikrotik/mikrotikClient');
 const { applySyncIntent, dryRunApplySyncIntent } = require('../integrations/mikrotik/mikrotikAdapter');
+const remoteAgentCommandService = require('../services/remoteAgentCommandService');
 
 const LOG_PREFIX = '[xpdcnet-sync-worker]';
 
@@ -313,6 +314,24 @@ async function processJob(job) {
 }
 
 async function tick() {
+  try {
+    const r = await remoteAgentCommandService.recoverStaleProcessingCommands({
+      timeoutMs: Number(process.env.REMOTE_AGENT_PROCESSING_TIMEOUT_MS || 120_000),
+      limit: Number(process.env.REMOTE_AGENT_RECOVERY_BATCH || 100),
+    });
+    if (r.requeued > 0 || r.failed > 0) {
+      console.log(
+        `${LOG_PREFIX} remote-agent recovery: checked=%d requeued=%d failed=%d timeoutMs=%d`,
+        r.checked,
+        r.requeued,
+        r.failed,
+        r.timeoutMs,
+      );
+    }
+  } catch (e) {
+    console.error(`${LOG_PREFIX} remote-agent recovery falhou: %s`, e && e.message ? e.message : e);
+  }
+
   if (STUCK_MS > 0) {
     try {
       const { reclaimed } = await mikrotikSyncService.reclaimStuckProcessingGlobal(STUCK_MS, STUCK_BATCH);

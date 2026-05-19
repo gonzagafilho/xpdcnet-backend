@@ -35,6 +35,27 @@ const RemoteAgentCommandSchema = new mongoose.Schema(
     resultMessage: { type: String, default: '' },
     resultError: { type: String, default: '' },
 
+      /**
+       * Hardening operacional:
+       * controla retries e recovery de comandos presos.
+       */
+      attempts: {
+        type: Number,
+        default: 0,
+        min: 0,
+      },
+
+      maxAttempts: {
+        type: Number,
+        default: 3,
+        min: 1,
+      },
+
+      lastErrorAt: {
+        type: Date,
+        default: null,
+      },
+
     lockedAt: { type: Date, default: null },
     completedAt: { type: Date, default: null },
   },

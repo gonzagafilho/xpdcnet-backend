@@ -102,8 +102,20 @@ exports.claimNextPendingForNode = async (nodeId) => {
   if (!mongoose.Types.ObjectId.isValid(String(nodeId))) return null;
 
   const cmd = await RemoteAgentCommand.findOneAndUpdate(
-    { networkNodeId: nodeId, status: 'pending' },
-    { $set: { status: 'processing', lockedAt: new Date() } },
+    {
+      networkNodeId: nodeId,
+      status: 'pending',
+      $expr: { $lt: ['$attempts', '$maxAttempts'] },
+    },
+    {
+      $set: {
+        status: 'processing',
+        lockedAt: new Date(),
+        resultError: '',
+        lastErrorAt: null,
+      },
+      $inc: { attempts: 1 },
+    },
     { sort: { createdAt: 1 }, new: true },
   ).lean();
 
@@ -142,4 +154,80 @@ exports.completeCommandForNode = async (nodeId, commandId, body) => {
 
   if (!updated) return { error: 'not_found_or_not_processing' };
   return { command: updated };
+};
+
+/**
+ * Recupera comandos presos em processing após timeout.
+ * - Se ainda tem tentativas disponíveis: volta para pending.
+ * - Se estourou maxAttempts: marca como failed.
+ */
+exports.recoverStaleProcessingCommands = async (opts = {}) => {
+  const timeoutMs = Math.min(
+    24 * 60 * 60 * 1000,
+    Math.max(30_000, Number(opts.timeoutMs || process.env.REMOTE_AGENT_PROCESSING_TIMEOUT_MS || 120_000)),
+  );
+
+  const now = new Date();
+  const staleBefore = new Date(Date.now() - timeoutMs);
+
+  const stale = await RemoteAgentCommand.find({
+    status: 'processing',
+    lockedAt: { $lte: staleBefore },
+  })
+    .sort({ lockedAt: 1 })
+    .limit(Math.min(500, Math.max(1, Number(opts.limit || 100))))
+    .lean();
+
+  let requeued = 0;
+  let failed = 0;
+
+  for (const cmd of stale) {
+    const attempts = Number(cmd.attempts || 0);
+    const maxAttempts = Math.max(1, Number(cmd.maxAttempts || 3));
+    const canRetry = attempts < maxAttempts;
+
+    if (canRetry) {
+      const r = await RemoteAgentCommand.updateOne(
+        { _id: cmd._id, status: 'processing' },
+        {
+          $set: {
+            status: 'pending',
+            resultSuccess: null,
+            resultAction: 'requeue_stale_processing',
+            resultMessage: 'Comando retornou para pending por timeout em processing.',
+            resultError: 'PROCESSING_TIMEOUT_REQUEUED',
+            lastErrorAt: now,
+          },
+          $unset: {
+            lockedAt: '',
+          },
+        },
+      );
+      if (r.modifiedCount > 0) requeued += 1;
+    } else {
+      const r = await RemoteAgentCommand.updateOne(
+        { _id: cmd._id, status: 'processing' },
+        {
+          $set: {
+            status: 'failed',
+            resultSuccess: false,
+            resultAction: 'deadletter_stale_processing',
+            resultMessage: 'Comando falhou após exceder tentativas por timeout em processing.',
+            resultError: 'PROCESSING_TIMEOUT_MAX_ATTEMPTS',
+            lastErrorAt: now,
+            completedAt: now,
+          },
+        },
+      );
+      if (r.modifiedCount > 0) failed += 1;
+    }
+  }
+
+  return {
+    ok: true,
+    timeoutMs,
+    checked: stale.length,
+    requeued,
+    failed,
+  };
 };
