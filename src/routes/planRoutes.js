@@ -1,10 +1,10 @@
 const router = require('express').Router();
 const auth = require('../middlewares/authMiddleware');
-const tenant = require('../middlewares/tenantMiddleware');
+const isAdmin = require('../middlewares/isAdmin');
 const planController = require('../controllers/planController');
 
-router.use(tenant);
 router.use(auth);
+router.use(isAdmin);
 
 router.post('/', planController.create);
 router.get('/', planController.list);
@@ -13,3 +13,4 @@ router.put('/:id', planController.update);
 router.delete('/:id', planController.remove);
 
 module.exports = router;
+

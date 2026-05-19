@@ -3,7 +3,7 @@ const ApiError = require('../errors/ApiError');
 const Plan = require('../models/Plan');
 
 exports.create = async (tenantId, data) => {
-  const { name, speedMbps, price, billingCycle, authType, mikrotik } = data;
+  const { name, speedMbps, price, billingCycle, authType, mikrotik, isActive } = data;
 
   if (!name || !speedMbps || price === undefined) {
     throw ApiError.badRequest('name, speedMbps e price são obrigatórios');
@@ -17,6 +17,7 @@ exports.create = async (tenantId, data) => {
     billingCycle: billingCycle || 'monthly',
     authType: authType || 'pppoe',
     mikrotik: mikrotik || {},
+    isActive: isActive === undefined ? true : Boolean(isActive),
   });
 
   return plan;

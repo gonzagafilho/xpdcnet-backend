@@ -30,6 +30,17 @@ exports.getById = async (req, res, next) => {
   }
 };
 
+/** GET .../network-intent — só política derivada do cadastro; não executa sync nem RouterOS. */
+exports.getNetworkIntent = async (req, res, next) => {
+  try {
+    const tenantId = req.tenant._id.toString();
+    const payload = await clientService.getNetworkIntent(tenantId, req.params.id);
+    res.json(payload);
+  } catch (err) {
+    next(err);
+  }
+};
+
 exports.update = async (req, res, next) => {
   try {
     const tenantId = req.tenant._id.toString();

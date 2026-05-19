@@ -17,3 +17,21 @@ exports.list = async (req, res, next) => {
     next(err);
   }
 };
+
+exports.getFinancePolicy = async (req, res, next) => {
+  try {
+    const payload = await tenantService.getFinancePolicyForOperationalTenant(req.headers);
+    res.json(payload);
+  } catch (err) {
+    next(err);
+  }
+};
+
+exports.updateFinancePolicy = async (req, res, next) => {
+  try {
+    const payload = await tenantService.updateFinancePolicyForOperationalTenant(req.headers, req.body, req.user || null);
+    res.json(payload);
+  } catch (err) {
+    next(err);
+  }
+};

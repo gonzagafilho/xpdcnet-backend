@@ -5,7 +5,14 @@
   "main": "src/server.js",
   "scripts": {
     "start": "node src/server.js",
-    "dev": "nodemon --legacy-watch src/server.js"
+    "dev": "nodemon --legacy-watch src/server.js",
+    "worker:sync": "node src/workers/mikrotikSyncWorker.js",
+    "worker:trust-expiry-enqueue": "node src/workers/mikrotikTrustExpiryEnqueueWorker.js",
+    "worker:finance-rollup": "node src/workers/financeDelinquencyRollupWorker.js",
+    "migrate:mikrotik-passwords": "node scripts/mikrotik-encrypt-passwords.js",
+    "migrate:billing-credentials": "node scripts/billing-encrypt-credentials.js",
+    "migrate:billing-rotate-credentials": "node scripts/billing-rotate-credentials.js",
+    "agent:remote": "node src/agent/remoteAgentOutbound.js"
   },
   "keywords": [],
   "author": "",
@@ -16,7 +23,8 @@
     "dotenv": "^16.4.5",
     "express": "^4.19.2",
     "jsonwebtoken": "^9.0.3",
-    "mongoose": "^9.1.5"
+    "mongoose": "^9.1.5",
+    "node-routeros": "^1.6.9"
   },
   "devDependencies": {
     "nodemon": "^3.0.3"

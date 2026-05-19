@@ -3,9 +3,14 @@ const jwt = require('jsonwebtoken');
 const ApiError = require('../errors/ApiError');
 const User = require('../models/User');
 const Role = require('../models/Role');
+const { getJwtSecret } = require('../config/jwt');
 
 function signAccessToken(payload) {
-  return jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: '15m' });
+  const secret = getJwtSecret();
+  if (!secret) {
+    throw ApiError.serviceUnavailable('Configuração do servidor incompleta.', 'SERVER_MISCONFIGURED');
+  }
+  return jwt.sign(payload, secret, { expiresIn: '15m' });
 }
 
 exports.registerOwner = async ({ tenantId, name, email, password }) => {
