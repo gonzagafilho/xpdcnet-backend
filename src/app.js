@@ -31,6 +31,8 @@ app.use(cors());
 app.use(express.json());
 
 app.get('/health', healthController.getHealth);
+app.get('/health/live', healthController.getLive);
+app.get('/health/ready', healthController.getReady);
 
 app.use(databaseReady);
 
