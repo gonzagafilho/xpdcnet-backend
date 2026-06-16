@@ -48,6 +48,14 @@ exports.getPppoe = async (req, res, next) => {
   }
 };
 
+exports.getPppoeHistory = async (req, res, next) => {
+  try {
+    res.json(await customerAppService.getCustomerPppoeHistory(tenantId(req), clientId(req)));
+  } catch (err) {
+    next(err);
+  }
+};
+
 exports.listInvoices = async (req, res, next) => {
   try {
     res.json({ items: await customerAppService.listInvoices(tenantId(req), clientId(req), req.query || {}) });

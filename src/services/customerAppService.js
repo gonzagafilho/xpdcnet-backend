@@ -135,6 +135,65 @@ function sessionQuality(session) {
   };
 }
 
+function bytesFromObject(obj, keys = []) {
+  if (!obj || typeof obj !== 'object') return null;
+  for (const key of keys) {
+    if (obj[key] == null || String(obj[key]).trim() === '') continue;
+    const value = Number(obj[key]);
+    if (Number.isFinite(value) && value >= 0) return value;
+  }
+  return null;
+}
+
+function sessionRxBytes(session) {
+  return bytesFromObject(session, ['rxBytes', 'rxByte', 'rx-byte', 'rx_bytes', 'bytesIn', 'inputBytes', 'uploadBytes', 'limitBytesIn']);
+}
+
+function sessionTxBytes(session) {
+  return bytesFromObject(session, ['txBytes', 'txByte', 'tx-byte', 'tx_bytes', 'bytesOut', 'outputBytes', 'downloadBytes', 'limitBytesOut']);
+}
+
+function emptyPppoeHistory(message = 'Sem histórico PPPoE recente.') {
+  const zero = { downloadGB: 0, uploadGB: 0, totalGB: 0 };
+  const today = new Date();
+  const buildZeroSeries = (days) => Array.from({ length: days }, (_, index) => ({
+    date: dayKey(addDays(today, index - (days - 1))),
+    ...zero,
+  }));
+
+  return {
+    today: { ...zero },
+    yesterday: { ...zero },
+    month: { ...zero },
+    series7d: buildZeroSeries(7),
+    series30d: buildZeroSeries(30),
+    source: 'empty',
+    message,
+  };
+}
+
+function dayKey(value) {
+  const date = value ? new Date(value) : new Date();
+  if (Number.isNaN(date.getTime())) return '';
+  return date.toISOString().slice(0, 10);
+}
+
+function addDays(date, amount) {
+  const copy = new Date(date);
+  copy.setUTCDate(copy.getUTCDate() + amount);
+  return copy;
+}
+
+function gb(bytes) {
+  return Number((Math.max(0, Number(bytes || 0)) / 1024 / 1024 / 1024).toFixed(3));
+}
+
+function usageBucket(downloadBytes = 0, uploadBytes = 0) {
+  const downloadGB = gb(downloadBytes);
+  const uploadGB = gb(uploadBytes);
+  return { downloadGB, uploadGB, totalGB: Number((downloadGB + uploadGB).toFixed(3)) };
+}
+
 function timeLabel(value) {
   if (!value) return '';
   const date = new Date(value);
@@ -555,7 +614,16 @@ exports.getPppoe = async (tenantId, clientId) => {
           status: 'done',
           resultSuccess: true,
           kind: { $in: ['SERVER_SNAPSHOT_DETAIL', 'SERVER_SNAPSHOT', 'READ_PPP_ACTIVE'] },
-          $or: commandOr,
+          $and: [
+            { $or: commandOr },
+            {
+              $or: [
+                { completedAt: { $gte: since } },
+                { updatedAt: { $gte: since } },
+                { createdAt: { $gte: since } },
+              ],
+            },
+          ],
         })
           .select('kind resultData completedAt updatedAt createdAt serverId networkNodeId')
           .sort({ completedAt: -1, updatedAt: -1, createdAt: -1 })
@@ -651,6 +719,125 @@ exports.getPppoe = async (tenantId, clientId) => {
   }
 
   return base;
+};
+
+
+exports.getCustomerPppoeHistory = async (tenantId, clientId) => {
+  const { tid, client, plan } = await loadContext(tenantId, clientId);
+  const authType = client.access?.authType || plan?.authType || 'pppoe';
+  const username = String(client.access?.username || '').trim();
+
+  if (authType !== 'pppoe') return emptyPppoeHistory('Seu acesso cadastrado nao e PPPoE.');
+  if (!username) return emptyPppoeHistory('Usuario PPPoE nao encontrado no cadastro.');
+
+  const serverId = client.mikrotik?.serverId || null;
+  const server = serverId
+    ? await MikrotikServer.findOne({ _id: serverId, tenantId: tid }).select('_id networkNodeId agentId').lean()
+    : null;
+  const nodeId = firstObjectId(client.networkNodeId, server?.networkNodeId, server?.agentId);
+  const commandOr = [];
+  if (client._id) commandOr.push({ clientId: client._id });
+  if (serverId) commandOr.push({ serverId });
+  if (nodeId) commandOr.push({ networkNodeId: nodeId });
+
+  const since = addDays(new Date(), -35);
+  const [commands, latestMetric, telemetrySnapshot] = await Promise.all([
+    commandOr.length
+      ? RemoteAgentCommand.find({
+          tenantId: tid,
+          status: 'done',
+          resultSuccess: true,
+          kind: { $in: ['SERVER_SNAPSHOT_DETAIL', 'SERVER_SNAPSHOT', 'READ_PPP_ACTIVE'] },
+          $and: [
+            { $or: commandOr },
+            {
+              $or: [
+                { completedAt: { $gte: since } },
+                { updatedAt: { $gte: since } },
+                { createdAt: { $gte: since } },
+              ],
+            },
+          ],
+        })
+          .select('resultData completedAt updatedAt createdAt')
+          .sort({ completedAt: 1, updatedAt: 1, createdAt: 1 })
+          .limit(500)
+          .lean()
+      : [],
+    nodeId ? NetworkNodeMetric.findOne({ tenantId: String(tid), nodeId }).sort({ sampledAt: -1, createdAt: -1 }).lean() : null,
+    [serverId, nodeId].filter(Boolean).length
+      ? MikrotikTelemetrySnapshot.findOne({ serverId: { $in: [serverId, nodeId].filter(Boolean) } }).sort({ createdAt: -1 }).lean()
+      : null,
+  ]);
+
+  const samples = [];
+  for (const command of commands) {
+    const sampledAt = command.completedAt || command.updatedAt || command.createdAt;
+    if (!sampledAt || new Date(sampledAt) < since) continue;
+    const session = findSessionByUsername(pppSessionsFromPayload(command.resultData), username);
+    if (!session) continue;
+    const rxBytes = sessionRxBytes(session);
+    const txBytes = sessionTxBytes(session);
+    if (rxBytes == null && txBytes == null) continue;
+    samples.push({ sampledAt: new Date(sampledAt), rxBytes, txBytes });
+  }
+
+  samples.sort((a, b) => a.sampledAt - b.sampledAt);
+  if (samples.length < 2) {
+    const msg = latestMetric || telemetrySnapshot
+      ? 'Sem histórico PPPoE recente por usuario.'
+      : 'Sem histórico PPPoE recente.';
+    return emptyPppoeHistory(msg);
+  }
+
+  const byDay = new Map();
+  let hasDelta = false;
+  for (let i = 1; i < samples.length; i += 1) {
+    const prev = samples[i - 1];
+    const current = samples[i];
+    const rxDelta = current.rxBytes != null && prev.rxBytes != null ? current.rxBytes - prev.rxBytes : 0;
+    const txDelta = current.txBytes != null && prev.txBytes != null ? current.txBytes - prev.txBytes : 0;
+    const uploadBytes = rxDelta > 0 ? rxDelta : 0;
+    const downloadBytes = txDelta > 0 ? txDelta : 0;
+    if (!uploadBytes && !downloadBytes) continue;
+    hasDelta = true;
+    const key = dayKey(current.sampledAt);
+    const bucket = byDay.get(key) || { downloadBytes: 0, uploadBytes: 0 };
+    bucket.downloadBytes += downloadBytes;
+    bucket.uploadBytes += uploadBytes;
+    byDay.set(key, bucket);
+  }
+
+  if (!hasDelta) return emptyPppoeHistory('Sem variação de consumo PPPoE recente.');
+
+  const now = new Date();
+  const todayKey = dayKey(now);
+  const yesterdayKey = dayKey(addDays(now, -1));
+  const monthPrefix = todayKey.slice(0, 7);
+  const monthBytes = { downloadBytes: 0, uploadBytes: 0 };
+
+  for (const [key, value] of byDay.entries()) {
+    if (key.startsWith(monthPrefix)) {
+      monthBytes.downloadBytes += value.downloadBytes;
+      monthBytes.uploadBytes += value.uploadBytes;
+    }
+  }
+
+  const buildSeries = (days) => Array.from({ length: days }, (_, index) => {
+    const key = dayKey(addDays(now, index - (days - 1)));
+    const value = byDay.get(key) || { downloadBytes: 0, uploadBytes: 0 };
+    return { date: key, ...usageBucket(value.downloadBytes, value.uploadBytes) };
+  });
+
+  return {
+    today: usageBucket(byDay.get(todayKey)?.downloadBytes || 0, byDay.get(todayKey)?.uploadBytes || 0),
+    yesterday: usageBucket(byDay.get(yesterdayKey)?.downloadBytes || 0, byDay.get(yesterdayKey)?.uploadBytes || 0),
+    month: usageBucket(monthBytes.downloadBytes, monthBytes.uploadBytes),
+    series7d: buildSeries(7),
+    series30d: buildSeries(30),
+    source: 'snapshot',
+    message: '',
+  };
 };
 
 exports.listInvoices = async (tenantId, clientId, query = {}) => {
