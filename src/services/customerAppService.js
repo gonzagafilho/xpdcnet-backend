@@ -41,6 +41,14 @@ function roundMetric(value) {
   return Number(Number(value).toFixed(2));
 }
 
+function metricFromObject(obj, keys = []) {
+  if (!obj || typeof obj !== 'object') return null;
+  for (const key of keys) {
+    if (obj[key] != null && Number.isFinite(Number(obj[key]))) return roundMetric(obj[key]);
+  }
+  return null;
+}
+
 function latestDate(...values) {
   const dates = values
     .filter(Boolean)
@@ -55,6 +63,83 @@ function firstObjectId(...values) {
     if (value && mongoose.Types.ObjectId.isValid(String(value))) return value;
   }
   return null;
+}
+
+function unwrapSnapshotPayload(value) {
+  if (!value) return null;
+  if (typeof value === 'string') {
+    try {
+      return unwrapSnapshotPayload(JSON.parse(value));
+    } catch (_) {
+      return null;
+    }
+  }
+  if (Array.isArray(value)) return value;
+  if (typeof value === 'object') {
+    if (value.raw) return unwrapSnapshotPayload(value.raw);
+    if (value.data) return unwrapSnapshotPayload(value.data);
+    if (value.resultData) return unwrapSnapshotPayload(value.resultData);
+    if (value.result) return unwrapSnapshotPayload(value.result);
+    return value;
+  }
+  return null;
+}
+
+function pppSessionsFromPayload(payload) {
+  const data = unwrapSnapshotPayload(payload);
+  if (!data) return [];
+  if (Array.isArray(data)) return data.filter((item) => item && typeof item === 'object');
+  const candidates = [
+    data.activePppSessions,
+    data.pppActive?.items,
+    data.pppActive,
+    data.pppActiveSessions,
+    data.sessions,
+    data.items,
+  ];
+  for (const candidate of candidates) {
+    if (Array.isArray(candidate)) return candidate.filter((item) => item && typeof item === 'object');
+  }
+  return [];
+}
+
+function pppTotalFromPayload(payload) {
+  const data = unwrapSnapshotPayload(payload);
+  if (!data || Array.isArray(data) || typeof data !== 'object') return null;
+  const value = data.activePppSessionsTotal ?? data.pppActiveTotal ?? data.pppActive?.total ?? data.total;
+  return value != null && Number.isFinite(Number(value)) ? Number(value) : null;
+}
+
+function findSessionByUsername(sessions = [], username = '') {
+  const target = String(username || '').trim().toLowerCase();
+  if (!target) return null;
+  return sessions.find((session) => {
+    const name = String(session.name ?? session.username ?? session.user ?? session.login ?? '').trim().toLowerCase();
+    return name && name === target;
+  }) || null;
+}
+
+function sessionDownloadMbps(session) {
+  return metricFromObject(session, ['downloadMbps', 'rxMbps', 'download_mbps', 'rxRateMbps']);
+}
+
+function sessionUploadMbps(session) {
+  return metricFromObject(session, ['uploadMbps', 'txMbps', 'upload_mbps', 'txRateMbps']);
+}
+
+function sessionQuality(session) {
+  return {
+    pingMs: metricFromObject(session, ['pingMs', 'ping', 'latencyMs']),
+    jitterMs: metricFromObject(session, ['jitterMs', 'jitter']),
+    packetLoss: metricFromObject(session, ['packetLoss', 'packetLossPercent', 'loss']),
+  };
+}
+
+function timeLabel(value) {
+  if (!value) return '';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  return new Intl.DateTimeFormat('pt-BR', { hour: '2-digit', minute: '2-digit', hour12: false }).format(date);
 }
 
 function safeClient(client) {
@@ -407,6 +492,165 @@ exports.getPlan = async (tenantId, clientId) => {
 exports.getConnection = async (tenantId, clientId) => {
   const { tid, client, plan } = await loadContext(tenantId, clientId);
   return connectionSnapshot(tid, client, plan);
+};
+
+exports.getPppoe = async (tenantId, clientId) => {
+  const { tid, client, plan } = await loadContext(tenantId, clientId);
+  const authType = client.access?.authType || plan?.authType || 'pppoe';
+  const username = String(client.access?.username || '').trim();
+  const usernameMasked = maskAccessUsername(username);
+  const alerts = [];
+
+  const base = {
+    status: 'unknown',
+    usernameMasked,
+    currentIp: null,
+    serverName: null,
+    uptime: null,
+    connectedAt: null,
+    lastUpdateAt: null,
+    trafficNow: {
+      downloadMbps: null,
+      uploadMbps: null,
+    },
+    quality: {
+      pingMs: null,
+      jitterMs: null,
+      packetLoss: null,
+    },
+    series: [],
+    alerts,
+  };
+
+  if (authType !== 'pppoe') {
+    alerts.push({ type: 'not_pppoe', severity: 'info', message: 'Seu acesso cadastrado nao e PPPoE.' });
+    return base;
+  }
+
+  if (!username) {
+    alerts.push({ type: 'missing_username', severity: 'warning', message: 'Usuario PPPoE nao encontrado no cadastro.' });
+    return base;
+  }
+
+  const serverId = client.mikrotik?.serverId || null;
+  const server = serverId
+    ? await MikrotikServer.findOne({ _id: serverId, tenantId: tid }).select('_id name isActive networkNodeId agentId').lean()
+    : null;
+  const nodeId = firstObjectId(client.networkNodeId, server?.networkNodeId, server?.agentId);
+  const node = nodeId
+    ? await NetworkNode.findOne({ _id: nodeId, tenantId: tid }).select('_id name status agentLastSeenAt').lean()
+    : null;
+
+  base.serverName = server?.name || node?.name || null;
+
+  const commandOr = [];
+  if (client._id) commandOr.push({ clientId: client._id });
+  if (serverId) commandOr.push({ serverId });
+  if (nodeId) commandOr.push({ networkNodeId: nodeId });
+
+  const [commands, latestMetric, telemetrySnapshot] = await Promise.all([
+    commandOr.length
+      ? RemoteAgentCommand.find({
+          tenantId: tid,
+          status: 'done',
+          resultSuccess: true,
+          kind: { $in: ['SERVER_SNAPSHOT_DETAIL', 'SERVER_SNAPSHOT', 'READ_PPP_ACTIVE'] },
+          $or: commandOr,
+        })
+          .select('kind resultData completedAt updatedAt createdAt serverId networkNodeId')
+          .sort({ completedAt: -1, updatedAt: -1, createdAt: -1 })
+          .limit(24)
+          .lean()
+      : [],
+    nodeId ? NetworkNodeMetric.findOne({ tenantId: String(tid), nodeId }).sort({ sampledAt: -1, createdAt: -1 }).lean() : null,
+    [serverId, nodeId].filter(Boolean).length
+      ? MikrotikTelemetrySnapshot.findOne({ serverId: { $in: [serverId, nodeId].filter(Boolean) } }).sort({ createdAt: -1 }).lean()
+      : null,
+  ]);
+
+  let latestCommandWithList = null;
+  let latestSession = null;
+  let latestTotal = null;
+
+  for (const command of commands) {
+    const sessions = pppSessionsFromPayload(command.resultData);
+    if (sessions.length && !latestCommandWithList) latestCommandWithList = command;
+    const session = findSessionByUsername(sessions, username);
+    const total = pppTotalFromPayload(command.resultData);
+    if (latestTotal == null && total != null) latestTotal = total;
+    if (session) {
+      latestSession = { session, command };
+      break;
+    }
+  }
+
+  const series = commands
+    .slice()
+    .reverse()
+    .map((command) => {
+      const session = findSessionByUsername(pppSessionsFromPayload(command.resultData), username);
+      if (!session) return null;
+      const downloadMbps = sessionDownloadMbps(session);
+      const uploadMbps = sessionUploadMbps(session);
+      if (downloadMbps == null && uploadMbps == null) return null;
+      const sampledAt = command.completedAt || command.updatedAt || command.createdAt;
+      return {
+        time: timeLabel(sampledAt),
+        downloadMbps,
+        uploadMbps,
+      };
+    })
+    .filter(Boolean)
+    .slice(-10);
+
+  const lastKnownAt = latestDate(
+    latestSession?.command?.completedAt,
+    latestSession?.command?.updatedAt,
+    latestCommandWithList?.completedAt,
+    latestCommandWithList?.updatedAt,
+    latestMetric?.sampledAt,
+    telemetrySnapshot?.createdAt,
+    node?.agentLastSeenAt,
+  );
+
+  if (latestSession) {
+    const session = latestSession.session;
+    const quality = sessionQuality(session);
+    base.status = 'online';
+    base.currentIp = session.address || session.remoteAddress || null;
+    base.uptime = session.uptime || null;
+    base.lastUpdateAt = lastKnownAt ? lastKnownAt.toISOString() : null;
+    base.trafficNow = {
+      downloadMbps: sessionDownloadMbps(session),
+      uploadMbps: sessionUploadMbps(session),
+    };
+    base.quality = quality;
+    base.series = series;
+
+    if (base.trafficNow.downloadMbps == null && base.trafficNow.uploadMbps == null) {
+      alerts.push({ type: 'traffic_unavailable', severity: 'info', message: 'Sessao PPPoE encontrada, mas sem dados recentes de trafego por cliente.' });
+    }
+    if (!series.length) {
+      alerts.push({ type: 'series_unavailable', severity: 'info', message: 'Sem pontos recentes de grafico para esta sessao PPPoE.' });
+    }
+    return base;
+  }
+
+  base.lastUpdateAt = lastKnownAt ? lastKnownAt.toISOString() : null;
+
+  if (latestCommandWithList) {
+    base.status = 'offline';
+    alerts.push({ type: 'session_offline', severity: 'warning', message: 'Nenhuma sessao PPPoE ativa encontrada para seu usuario na ultima leitura.' });
+    return base;
+  }
+
+  if (latestTotal != null || latestMetric || telemetrySnapshot) {
+    alerts.push({ type: 'no_client_session_snapshot', severity: 'info', message: 'Sem dados recentes da sua sessao PPPoE individual.' });
+  } else {
+    alerts.push({ type: 'no_recent_data', severity: 'info', message: 'Sem dados recentes de PPPoE para exibir.' });
+  }
+
+  return base;
 };
 
 exports.listInvoices = async (tenantId, clientId, query = {}) => {

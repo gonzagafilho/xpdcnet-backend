@@ -16,6 +16,7 @@ router.get('/me', customerAppController.getMe);
 router.get('/dashboard', customerAppController.getExecutiveDashboard);
 router.get('/plan', customerAppController.getPlan);
 router.get('/connection', customerAppController.getConnection);
+router.get('/pppoe', customerAppController.getPppoe);
 router.get('/invoices', customerAppController.listInvoices);
 router.get('/invoices/:id/payment', customerAppController.getInvoicePayment);
 
