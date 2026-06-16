@@ -12,7 +12,8 @@
     "migrate:mikrotik-passwords": "node scripts/mikrotik-encrypt-passwords.js",
     "migrate:billing-credentials": "node scripts/billing-encrypt-credentials.js",
     "migrate:billing-rotate-credentials": "node scripts/billing-rotate-credentials.js",
-    "agent:remote": "node src/agent/remoteAgentOutbound.js"
+    "agent:remote": "node src/agent/remoteAgentOutbound.js",
+    "worker:telemetry-snapshot": "node src/workers/mikrotikTelemetrySnapshotWorker.js"
   },
   "keywords": [],
   "author": "",
@@ -24,7 +25,8 @@
     "express": "^4.19.2",
     "jsonwebtoken": "^9.0.3",
     "mongoose": "^9.1.5",
-    "node-routeros": "^1.6.9"
+    "node-routeros": "^1.6.9",
+    "socket.io": "^4.8.3"
   },
   "devDependencies": {
     "nodemon": "^3.0.3"

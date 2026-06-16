@@ -1,7 +1,9 @@
 require('dotenv').config();
 
+const http = require('http');
 const app = require('./app');
 const connectDB = require('./config/db');
+const { initRealtime } = require('./realtime/socketServer');
 
 const PORT = process.env.PORT || 3000;
 
@@ -18,8 +20,15 @@ const PORT = process.env.PORT || 3000;
     }
   }
 
-  app.listen(PORT, () => {
-    const mode = process.env.SYSTEM_MODE || 'production';
-    console.log(`[API] XPDCNET API rodando na porta ${PORT} (SYSTEM_MODE=${mode})`);
-  });
+  const server = http.createServer(app);
+
+initRealtime(server);
+
+server.listen(PORT, () => {
+  const mode = process.env.SYSTEM_MODE || 'production';
+
+  console.log(
+    `[API] XPDCNET API rodando na porta ${PORT} (SYSTEM_MODE=${mode})`
+  );
+});
 })();

@@ -11,6 +11,8 @@
 
 require('dotenv').config();
 
+const { markWorkerHeartbeat } = require('../services/workerTelemetryService');
+
 const mongoose = require('mongoose');
 const connectDB = require('../config/db');
 const { runTrustExpiryEnqueueTick, LOG_PREFIX } = require('../services/mikrotikTrustExpiryEnqueueService');
@@ -58,10 +60,24 @@ async function main() {
     process.once('SIGTERM', stop);
 
     while (running) {
+      const startedAt = Date.now();
+
       try {
         await tick();
+
+          await markWorkerHeartbeat('trust', {
+            success: true,
+            status: 'online',
+            lastDurationMs: Date.now() - startedAt,
+          });
       } catch (e) {
         console.error(`${LOG_PREFIX} erro no tick: %s`, e && e.message ? e.message : e);
+
+          await markWorkerHeartbeat('trust', {
+            status: 'degraded',
+            errorMessage: e && e.message ? e.message : String(e),
+            lastDurationMs: Date.now() - startedAt,
+          });
       }
       if (!running) break;
       await sleepWhileRunning(POLL_MS, () => running);

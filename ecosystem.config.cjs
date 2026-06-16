@@ -47,7 +47,7 @@ module.exports = {
       env_file: '.env',
       env: {
         NODE_ENV: 'production',
-        MIKROTIK_SYNC_EXECUTION_MODE: 'simulate',
+        MIKROTIK_SYNC_EXECUTION_MODE: 'live',
         MIKROTIK_SYNC_POLL_MS: '5000',
         MIKROTIK_SYNC_BATCH: '10',
         MIKROTIK_SYNC_ROUTEROS_TIMEOUT_MS: '20000',

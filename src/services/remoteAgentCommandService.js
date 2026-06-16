@@ -1,5 +1,10 @@
 const mongoose = require('mongoose');
 const RemoteAgentCommand = require('../models/RemoteAgentCommand');
+const { emitRealtime } = require('../realtime/socketServer');
+const { persistInterfaceDiscovery } = require('./networkInterfaceInventoryService');
+const { correlateTopologyFromInterfaces } = require('./networkTopologyCorrelationService');
+const { updateTopologyHealthFromInterfaces } = require('./networkTopologyHealthService');
+const { saveTelemetrySnapshot } = require('./mikrotikTelemetryService');
 
 /**
  * @param {object} params
@@ -146,6 +151,7 @@ exports.completeCommandForNode = async (nodeId, commandId, body) => {
   const resultAction = body.action != null ? String(body.action).slice(0, 32) : null;
   const resultMessage = body.message != null ? String(body.message).slice(0, 4000) : '';
   const resultError = body.error != null ? String(body.error).slice(0, 2000) : '';
+  const resultData = body.resultData ?? body.data ?? body.result ?? null;
 
   const updated = await RemoteAgentCommand.findOneAndUpdate(
     {
@@ -160,6 +166,7 @@ exports.completeCommandForNode = async (nodeId, commandId, body) => {
         resultAction,
         resultMessage,
         resultError: success ? '' : resultError,
+        resultData,
         completedAt: new Date(),
       },
     },
@@ -167,7 +174,288 @@ exports.completeCommandForNode = async (nodeId, commandId, body) => {
   ).lean();
 
   if (!updated) return { error: 'not_found_or_not_processing' };
-  return { command: updated };
+
+  if (
+    success &&
+    updated.kind === 'READ_INTERFACE_DISCOVERY'
+  ) {
+    try {
+      const persisted = await persistInterfaceDiscovery({
+        tenantId: updated.tenantId,
+        networkNodeId: updated.networkNodeId,
+        commandId: updated._id,
+        interfaces: Array.isArray(resultData)
+          ? resultData
+          : [],
+      });
+
+      const correlated = await correlateTopologyFromInterfaces({
+        tenantId: updated.tenantId,
+        networkNodeId: updated.networkNodeId,
+      });
+
+      const health = await updateTopologyHealthFromInterfaces({
+        tenantId: updated.tenantId,
+        networkNodeId: updated.networkNodeId,
+      });
+
+      console.log(
+        '[interface.discovery.pipeline]',
+        JSON.stringify({
+          persisted,
+          correlated,
+          health,
+        })
+      );
+    } catch (pipelineError) {
+      console.error(
+        '[interface.discovery.pipeline.error]',
+        pipelineError
+      );
+    }
+  }
+
+
+
+try {
+  emitRealtime('noc.event', {
+    type: success ? 'command.done' : 'command.failed',
+    severity: success ? 'success' : 'warning',
+    title: success
+      ? 'Comando remoto concluído'
+      : 'Comando remoto falhou',
+
+    message: success
+      ? `${updated.kind || 'COMMAND'} concluído`
+      : `${updated.kind || 'COMMAND'} falhou: ${
+          resultError || resultMessage || 'erro desconhecido'
+        }`,
+
+    commandId: String(updated._id),
+    networkNodeId: String(updated.networkNodeId),
+    tenantId: String(updated.tenantId),
+
+    kind: updated.kind,
+    status: updated.status,
+
+    resultAction: updated.resultAction,
+    resultMessage: updated.resultMessage,
+    resultError: updated.resultError,
+
+    completedAt: updated.completedAt,
+  });
+
+  emitRealtime('command:update', {
+    commandId: String(updated._id),
+    networkNodeId: String(updated.networkNodeId),
+    tenantId: String(updated.tenantId),
+
+    kind: updated.kind,
+    status: updated.status,
+
+    success,
+  });
+  if (
+  success &&
+  (
+    updated.kind === 'READ_RESOURCE' ||
+    updated.kind === 'SERVER_SNAPSHOT' ||
+    updated.kind === 'SERVER_SNAPSHOT_DETAIL' ||
+    updated.kind === 'READ_PPP_ACTIVE'
+  )
+) {
+  const rawData = updated.resultData || resultData || null;
+
+  const unwrap = (value) => {
+    if (!value) return null;
+
+    if (Array.isArray(value)) {
+      return unwrap(value[0]);
+    }
+
+    if (typeof value === 'string') {
+      try {
+        return unwrap(JSON.parse(value));
+      } catch (_) {
+        return null;
+      }
+    }
+
+    if (typeof value === 'object') {
+      if (value.raw) return unwrap(value.raw);
+      if (value.data) return unwrap(value.data);
+      if (value.resultData) return unwrap(value.resultData);
+      return value;
+    }
+
+    return null;
+  };
+
+  const telemetry = unwrap(rawData);
+
+  const resource = Array.isArray(telemetry?.resource)
+  ? telemetry.resource[0]
+  : telemetry?.resource || (
+      telemetry &&
+      typeof telemetry === 'object' &&
+      telemetry['cpu-load'] != null
+        ? telemetry
+        : null
+    );
+
+  const identity = Array.isArray(telemetry?.identity)
+    ? telemetry.identity[0]
+    : telemetry?.identity || null;
+
+  const cpuLoad =
+    resource && resource['cpu-load'] != null
+      ? Number(resource['cpu-load'])
+      : null;
+
+
+    const pppEnvCount = Array.isArray(rawData)
+      ? rawData.find((item) => item?.name === 'xpdcnetPppActiveCount')
+      : null;
+
+    const pppEnvAt = Array.isArray(rawData)
+      ? rawData.find((item) => item?.name === 'xpdcnetPppActiveAt')
+      : null;
+
+    const pppOnline =
+      telemetry?.pppActiveTotal != null
+        ? Number(telemetry.pppActiveTotal)
+        : telemetry?.pppActive?.total != null
+          ? Number(telemetry.pppActive.total)
+          : pppEnvCount?.value != null
+            ? Number(pppEnvCount.value)
+            : null;
+
+    const freeMemory =
+      resource && resource['free-memory'] != null
+        ? Number(resource['free-memory'])
+        : null;
+
+    const totalMemory =
+      resource && resource['total-memory'] != null
+        ? Number(resource['total-memory'])
+        : null;
+
+    const version =
+      resource && resource.version != null
+        ? String(resource.version)
+        : null;
+
+    const uptime =
+      resource && resource.uptime != null
+        ? String(resource.uptime)
+        : null;
+
+  const interfaces = Array.isArray(telemetry?.interfaces)
+    ? telemetry.interfaces
+    : [];
+
+  const routerName =
+    identity?.name ||
+    telemetry?.identity?.name ||
+    telemetry?.name ||
+    'RouterOS';
+
+  console.log('[TELEMETRY_METRIC_EMIT]', JSON.stringify({
+    kind: updated.kind,
+    cpuLoad,
+    freeMemory,
+    totalMemory,
+    pppOnline,
+    pppCollectedAt: pppEnvAt?.value || telemetry?.pppActive?.collectedAt || null,
+    version,
+    uptime,
+    interfaceCount: interfaces.length,
+  }));
+
+     emitRealtime('telemetry.metric', {
+      type: 'telemetry.metric',
+      severity: 'info',
+
+      title: 'Telemetria RouterOS',
+
+      message:
+        `${routerName}: CPU ${cpuLoad ?? '—'}% | ` +
+        `PPP ${pppOnline ?? '—'} | ` +
+        `Interfaces ${interfaces.length}`,
+
+      commandId: String(updated._id),
+      networkNodeId: String(updated.networkNodeId),
+      tenantId: String(updated.tenantId),
+
+      routerName,
+      cpuLoad,
+      pppOnline,
+      freeMemory,
+      totalMemory,
+      version,
+      uptime,
+      interfaceCount: interfaces.length,
+      
+      completedAt: updated.completedAt,
+    });
+
+    saveTelemetrySnapshot({
+      serverId: updated.serverId || updated.networkNodeId,
+      serverName: routerName,
+      cpuPercent: cpuLoad || 0,
+      memoryPercent:
+        totalMemory && freeMemory
+          ? Math.max(0, Math.min(100, Number((((totalMemory - freeMemory) / totalMemory) * 100).toFixed(2))))
+          : 0,
+      pppOnline: pppOnline || 0,
+      interfaces,
+      metadata: {
+        kind: updated.kind,
+        commandId: String(updated._id),
+        tenantId: String(updated.tenantId),
+        networkNodeId: String(updated.networkNodeId),
+        pppCollectedAt: pppEnvAt?.value || telemetry?.pppActive?.collectedAt || null,
+        version,
+        uptime,
+      },
+    }).then((snap) => {
+      console.log('[TELEMETRY_SNAPSHOT_SAVED]', JSON.stringify({
+        id: String(snap._id),
+        serverId: String(snap.serverId),
+        pppOnline: snap.pppOnline,
+        kind: snap.metadata?.kind,
+      }));
+    }).catch((err) => {
+      console.error('[TELEMETRY_SNAPSHOT_SAVE_ERROR]', err && err.message ? err.message : err);
+    });
+  if (cpuLoad !== null && cpuLoad >= 85) {
+    emitRealtime('telemetry.alert', {
+      type: 'telemetry.alert',
+      severity: 'warning',
+
+      title: 'CPU elevada no RouterOS',
+
+      message: `${routerName}: CPU ${cpuLoad}%`,
+
+      commandId: String(updated._id),
+      networkNodeId: String(updated.networkNodeId),
+      tenantId: String(updated.tenantId),
+
+      routerName,
+      cpuLoad,
+
+      completedAt: updated.completedAt,
+    });
+  }
+}
+} catch (err) {
+  console.error(
+    '[REMOTE_AGENT_COMMAND_REALTIME] falha ao emitir evento:',
+    err && err.message ? err.message : err
+  );
+}
+
+return { command: updated };
 };
 
 /**
@@ -244,4 +532,44 @@ exports.recoverStaleProcessingCommands = async (opts = {}) => {
     requeued,
     failed,
   };
+};
+
+
+/**
+ * Comando remoto administrativo genérico.
+ */
+exports.enqueueGenericCommand = async (params) => {
+  const {
+    tenantId,
+    networkNodeId,
+    serverId,
+    kind,
+    payload,
+  } = params;
+
+  const command = await RemoteAgentCommand.create({
+    tenantId,
+    networkNodeId,
+    clientId: null,
+    serverId: serverId || null,
+    mikrotikSyncJobId: null,
+    kind,
+    status: 'pending',
+    payload: payload || {},
+  });
+
+  return { command: command.toObject() };
+};
+
+/**
+ * Lista comandos de um node.
+ */
+exports.listCommandsForNode = async (tenantId, networkNodeId, limit = 50) => {
+  return RemoteAgentCommand.find({
+    tenantId,
+    networkNodeId,
+  })
+    .sort({ createdAt: -1 })
+    .limit(Math.min(200, Math.max(1, Number(limit || 50))))
+    .lean();
 };

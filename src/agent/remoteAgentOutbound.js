@@ -229,6 +229,7 @@ async function processOneCommand(cmd) {
     action: outcome.action,
     message: outcome.message,
     error: outcome.error,
+      resultData: outcome.data || outcome.resultData || null,
   });
 }
 

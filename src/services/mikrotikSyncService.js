@@ -28,6 +28,27 @@ function trimErr(msg) {
  * @returns {Promise<object|null>}
  */
 exports.enqueueSync = async (tenantId, clientId, options = {}) => {
+  // Compatibilidade segura:
+  // formato oficial: enqueueSync(tenantId, clientId, options)
+  // formato legado/teste: enqueueSync({ tenantId, clientId, reason, ... })
+  if (
+    tenantId &&
+    typeof tenantId === 'object' &&
+    !Array.isArray(tenantId) &&
+    clientId === undefined
+  ) {
+    const legacy = tenantId;
+    tenantId = legacy.tenantId;
+    clientId = legacy.clientId;
+    options = {
+      force: legacy.force === true,
+      triggerReason: legacy.triggerReason || legacy.reason || 'legacy_enqueue_object',
+      triggerSource: legacy.triggerSource || 'legacy_enqueue_object',
+      triggerContext: legacy.triggerContext || legacy.context || {},
+      refreshIntentOnDuplicate: legacy.refreshIntentOnDuplicate === true,
+    };
+  }
+
   const tid = tenantId;
   const cid = clientId;
   const trigger = normalizeTriggerPayload(options);

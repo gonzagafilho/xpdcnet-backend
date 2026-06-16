@@ -47,6 +47,11 @@ const NetworkNodeSchema = new mongoose.Schema(
     agentTokenHash: { type: String, default: null, select: false },
     agentLastSeenAt: { type: Date, default: null },
     /** Metadado livre enviado no heartbeat (versão do binário, hostname, etc.). */
+      healthScore: { type: Number, default: 100, min: 0, max: 100, index: true },
+      healthLevel: { type: String, enum: ['healthy', 'warning', 'critical', 'offline'], default: 'healthy', index: true },
+      healthUpdatedAt: { type: Date, default: null },
+      healthReasons: { type: [String], default: [] },
+
     agentMeta: { type: mongoose.Schema.Types.Mixed, default: null },
   },
   { timestamps: true },

@@ -11,8 +11,27 @@ module.exports = (req, res, next) => {
     }
 
     const header = req.headers.authorization || '';
-    const token = header.startsWith('Bearer ') ? header.slice(7) : null;
-    if (!token) {
+
+let token = null;
+
+if (header.startsWith('Bearer ')) {
+  token = header.slice(7);
+}
+
+/**
+ * SSE/EventSource não suporta Authorization header.
+ * Permitir ?token= SOMENTE na rota realtime /stream.
+ */
+if (
+  !token &&
+  req.path === '/stream' &&
+  req.query &&
+  typeof req.query.token === 'string'
+) {
+  token = String(req.query.token).trim();
+}
+
+if (!token) {
       console.warn('[AUTH] acesso negado: token ausente method=%s path=%s ip=%s', req.method, req.originalUrl, req.ip);
       return next(ApiError.unauthorized('Token ausente'));
     }

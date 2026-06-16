@@ -1,5 +1,6 @@
 const networkNodeService = require('../services/networkNodeService');
 const operationLogService = require('../services/operationLogService');
+const remoteAgentCommandService = require('../services/remoteAgentCommandService');
 
 exports.list = async (req, res, next) => {
   try {
@@ -65,6 +66,41 @@ exports.rotateAgentToken = async (req, res, next) => {
       req,
     });
     res.status(200).json(out);
+  } catch (err) {
+    next(err);
+  }
+};
+
+
+exports.createAdminCommand = async (req, res, next) => {
+  try {
+    const tenantId = req.tenant._id.toString();
+
+    const out = await remoteAgentCommandService.enqueueGenericCommand({
+      tenantId,
+      networkNodeId: req.params.id,
+      serverId: req.body?.serverId || null,
+      kind: req.body?.kind || 'READ_RESOURCE',
+      payload: req.body?.payload || {},
+    });
+
+    res.status(201).json(out);
+  } catch (err) {
+    next(err);
+  }
+};
+
+exports.listAdminCommands = async (req, res, next) => {
+  try {
+    const tenantId = req.tenant._id.toString();
+
+    const rows = await remoteAgentCommandService.listCommandsForNode(
+      tenantId,
+      req.params.id,
+      req.query?.limit || 50,
+    );
+
+    res.json(Array.isArray(rows) ? rows : []);
   } catch (err) {
     next(err);
   }

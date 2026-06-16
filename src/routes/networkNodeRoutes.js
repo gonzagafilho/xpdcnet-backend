@@ -9,6 +9,10 @@ router.use(isAdmin);
 router.get('/', networkNodeController.list);
 router.post('/', networkNodeController.create);
 router.post('/:id/agent-token/rotate', networkNodeController.rotateAgentToken);
+
+router.post('/:id/commands', networkNodeController.createAdminCommand);
+router.get('/:id/commands', networkNodeController.listAdminCommands);
+
 router.get('/:id', networkNodeController.getById);
 router.put('/:id', networkNodeController.update);
 router.delete('/:id', networkNodeController.remove);

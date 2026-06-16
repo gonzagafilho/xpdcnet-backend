@@ -2,6 +2,8 @@ const crypto = require('crypto');
 const mongoose = require('mongoose');
 const ApiError = require('../errors/ApiError');
 const NetworkNode = require('../models/NetworkNode');
+const NetworkNodeMetric = require('../models/NetworkNodeMetric');
+const networkIncidentEngine = require('./networkIncidentEngine');
 
 function hashAgentToken(plain) {
   return crypto.createHash('sha256').update(String(plain), 'utf8').digest('hex');
@@ -181,11 +183,85 @@ exports.verifyAgentCredentials = async (nodeIdPlain, bearerToken) => {
 };
 
 exports.touchAgentHeartbeat = async (nodeId, meta) => {
-  const $set = { agentLastSeenAt: new Date(), status: 'online' };
+  const now = new Date();
+  const $set = { agentLastSeenAt: now, status: 'online' };
+
   if (meta && typeof meta === 'object') {
     $set.agentMeta = meta;
   }
+
   await NetworkNode.updateOne({ _id: nodeId }, { $set });
+
+  try {
+    const node = await NetworkNode.findById(nodeId).lean();
+
+    if (node && meta && typeof meta === 'object') {
+      const mikrotik = meta.mikrotik && typeof meta.mikrotik === 'object'
+        ? meta.mikrotik
+        : {};
+
+      const resource = Array.isArray(mikrotik.resource) && mikrotik.resource[0]
+        ? mikrotik.resource[0]
+        : {};
+
+      const identity = Array.isArray(mikrotik.identity) && mikrotik.identity[0]
+        ? mikrotik.identity[0]
+        : {};
+
+      let rawInterfaces = mikrotik.interfaces;
+
+      if (typeof rawInterfaces === 'string') {
+        try {
+          rawInterfaces = JSON.parse(rawInterfaces);
+        } catch (_) {
+          rawInterfaces = [];
+        }
+      }
+
+      const interfaces = Array.isArray(rawInterfaces)
+        ? rawInterfaces
+            .filter((item) => item && typeof item === 'object' && !Array.isArray(item))
+            .map((item) => ({
+              name: String(item.name || ''),
+              type: String(item.type || ''),
+              running: item.running === true || item.running === 'true',
+              disabled: item.disabled === true || item.disabled === 'true',
+              rxMbps: Number(item.rxMbps || 0),
+              txMbps: Number(item.txMbps || 0),
+              rxByte: Number(item.rxByte || item.rxBytes || item['rx-byte'] || item['rx-bytes'] || 0),
+              txByte: Number(item.txByte || item.txBytes || item['tx-byte'] || item['tx-bytes'] || 0),
+              macAddress: String(item.macAddress || item['mac-address'] || ''),
+            }))
+        : [];
+
+      const safeInterfaces = interfaces.filter((item) => item.name);
+
+      const metric = await NetworkNodeMetric.create({
+        tenantId: String(node.tenantId),
+        nodeId: node._id,
+        sampledAt: now,
+        status: String(meta.status || 'online'),
+        hostname: meta.hostname ? String(meta.hostname) : '',
+        mikrotikName: identity.name ? String(identity.name) : '',
+        cpuLoad: Number(resource['cpu-load'] || 0),
+        memoryFreeBytes: Number(resource['free-memory'] || 0),
+        totalRxMbps: Number(mikrotik.totalRxMbps || 0),
+        totalTxMbps: Number(mikrotik.totalTxMbps || 0),
+        interfaceCount: Number(mikrotik.interfaceCount || safeInterfaces.length || 0),
+        pppOnlineCount: Number(mikrotik.pppOnlineCount || 0),
+        interfaces: safeInterfaces,
+        raw: meta,
+      });
+
+      await networkIncidentEngine.evaluateHeartbeat({
+        node,
+        metric,
+        meta,
+      });
+    }
+  } catch (err) {
+    console.error('[NetworkNodeMetric] falha ao salvar métrica:', err.message);
+  }
 };
 
 /**

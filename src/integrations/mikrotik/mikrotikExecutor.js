@@ -307,8 +307,76 @@ async function fetchOperationalSnapshotDetail(api) {
   } catch (_) {
     /* intencional */
   }
+
+  let dns = null;
+
+  try {
+    dns = await printFirstRow(api, '/ip/dns');
+  } catch (_) {
+    /* intencional */
+  }
+
+  let firewallNat = [];
+
+  try {
+    const natRows = await api.write('/ip/firewall/nat/print', []);
+    firewallNat = Array.isArray(natRows) ? natRows.slice(0, 200) : [];
+  } catch (_) {
+    /* intencional */
+  }
+
+  let routerServices = [];
+
+  try {
+    const serviceRows = await api.write('/ip/service/print', []);
+    routerServices = Array.isArray(serviceRows) ? serviceRows.slice(0, 50) : [];
+  } catch (_) {
+    /* intencional */
+  }
+
+  let routerHistory = [];
+
+  try {
+    const historyRows = await api.write('/system/history/print', []);
+    routerHistory = Array.isArray(historyRows) ? historyRows.slice(0, 80) : [];
+  } catch (_) {
+    /* intencional */
+  }
+
+  let routerUsers = [];
+
+  try {
+    const userRows = await api.write('/user/print', []);
+    routerUsers = Array.isArray(userRows) ? userRows.slice(0, 80) : [];
+  } catch (_) {
+    /* intencional */
+  }
+
+  let routerLogs = [];
+
+  try {
+    const logRows = await api.write('/log/print', []);
+    routerLogs = Array.isArray(logRows) ? logRows.slice(0, 120) : [];
+  } catch (_) {
+    /* intencional */
+  }
+
   const pppActive = await fetchPppActiveSessions(api, PPP_ACTIVE_LIMIT_DEFAULT);
-  return { identity, resource, routerboard, interfaces, pppSecretCount, pppActive };
+
+  return {
+    identity,
+    resource,
+    routerboard,
+    interfaces,
+    pppSecretCount,
+    pppActive,
+    dns,
+    firewallNat,
+    routerServices,
+    routerHistory,
+    routerUsers,
+    routerLogs,
+  };
 }
 
 module.exports = {

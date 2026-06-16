@@ -22,6 +22,7 @@ const systemHealthRoutes = require('./routes/systemHealthRoutes');
 const billingRoutes = require('./routes/billing/billingRoutes');
 const operationsReadRoutes = require('./routes/operations/operationsReadRoutes');
 const monitoringBoardRoutes = require('./routes/monitoringBoardRoutes');
+const networkTopologyRoutes = require('./routes/networkTopologyRoutes');
 const systemSetupRoutes = require('./routes/systemSetupRoutes');
 const requireMikrotikCryptoConfigured = require('./middlewares/requireMikrotikCryptoConfigured');
 
@@ -59,6 +60,7 @@ app.use('/system/health', tenantMiddleware, systemHealthRoutes);
 app.use('/billing', tenantMiddleware, billingRoutes);
 app.use('/operations', tenantMiddleware, operationsReadRoutes);
 app.use('/monitoring', tenantMiddleware, monitoringBoardRoutes);
+app.use('/topology', tenantMiddleware, networkTopologyRoutes);
 
 // error handler por último
 app.use(errorHandler);

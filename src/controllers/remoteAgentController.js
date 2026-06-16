@@ -2,6 +2,7 @@ const Client = require('../models/Client');
 const networkNodeService = require('../services/networkNodeService');
 const remoteAgentCommandService = require('../services/remoteAgentCommandService');
 const operationLogService = require('../services/operationLogService');
+const { emitRealtime } = require('../realtime/socketServer');
 
 exports.heartbeat = async (req, res, next) => {
   try {

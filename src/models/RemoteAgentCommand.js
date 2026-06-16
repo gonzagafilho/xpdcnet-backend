@@ -17,7 +17,19 @@ const RemoteAgentCommandSchema = new mongoose.Schema(
 
     kind: {
       type: String,
-      enum: ['SYNC_INTENT', 'MONITORING_INSPECT', 'SERVER_SNAPSHOT', 'SERVER_SNAPSHOT_DETAIL'],
+      enum: [
+        'SYNC_INTENT',
+        'MONITORING_INSPECT',
+        'SERVER_SNAPSHOT',
+        'SERVER_SNAPSHOT_DETAIL',
+        'READ_IDENTITY',
+        'READ_RESOURCE',
+        'READ_INTERFACES',
+        'READ_PPP_ACTIVE',
+        'READ_NEIGHBORS',
+        'READ_WIREGUARD_PEERS',
+        'READ_INTERFACE_DISCOVERY',
+      ],
       default: 'SYNC_INTENT',
     },
 
@@ -34,6 +46,7 @@ const RemoteAgentCommandSchema = new mongoose.Schema(
     resultAction: { type: String, default: null },
     resultMessage: { type: String, default: '' },
     resultError: { type: String, default: '' },
+      resultData: { type: mongoose.Schema.Types.Mixed, default: null },
 
       /**
        * Hardening operacional:

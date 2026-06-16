@@ -14,6 +14,7 @@ const {
 const networkNodeRoutingService = require('./networkNodeRoutingService');
 const remoteAgentCommandService = require('./remoteAgentCommandService');
 const RemoteAgentCommand = require('../models/RemoteAgentCommand');
+const { saveTelemetrySnapshot } = require('./mikrotikTelemetryService');
 
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
@@ -26,6 +27,10 @@ async function waitRemoteAgentJsonResult(commandId, timeoutMs) {
     const doc = await RemoteAgentCommand.findById(commandId).lean();
     if (!doc) return { err: 'REMOTE_COMMAND_LOST' };
     if (doc.status === 'done' && doc.resultSuccess) {
+      if (doc.resultData && typeof doc.resultData === 'object') {
+        return { json: doc.resultData };
+      }
+
       try {
         return { json: JSON.parse(doc.resultMessage || '{}') };
       } catch (_) {
@@ -79,22 +84,27 @@ function buildBoardLabel(routerboard, resource) {
 }
 
 function normalizeSnapshot(raw) {
-  const { identity, resource, routerboard, interfaces, pppSecretCount, pppActiveTotal } = raw || {};
-  const version = pickStr(resource, 'version');
-  const identityName = pickStr(identity, 'name');
-  const uptime = pickStr(resource, 'uptime');
+  
+  const identityObj = Array.isArray(raw?.identity) ? raw.identity[0] : raw?.identity;
+  const resourceObj = Array.isArray(raw?.resource) ? raw.resource[0] : raw?.resource;
+  const routerboardObj = Array.isArray(raw?.routerboard) ? raw.routerboard[0] : raw?.routerboard;
+  const { interfaces, pppSecretCount, pppActiveTotal } = raw || {};
+
+  const version = pickStr(resourceObj, 'version');
+  const identityName = pickStr(identityObj, 'name');
+  const uptime = pickStr(resourceObj, 'uptime');
   const cpuPercent = parseCpuLoad(
-    resource && (resource['cpu-load'] != null ? resource['cpu-load'] : resource.cpuLoad),
+   resourceObj && (resourceObj['cpu-load'] != null ? resourceObj['cpu-load'] : resourceObj.cpuLoad),
   );
-  const memFree = parseBigIntish(resource && (resource['free-memory'] ?? resource.freeMemory));
-  const memTotal = parseBigIntish(resource && (resource['total-memory'] ?? resource.totalMemory));
-  const diskFree = parseBigIntish(resource && (resource['free-hdd-space'] ?? resource.freeHddSpace));
-  const diskTotal = parseBigIntish(resource && (resource['total-hdd-space'] ?? resource.totalHddSpace));
+  const memFree = parseBigIntish(resourceObj && (resourceObj['free-memory'] ?? resourceObj.freeMemory));
+  const memTotal = parseBigIntish(resourceObj && (resourceObj['total-memory'] ?? resourceObj.totalMemory));
+  const diskFree = parseBigIntish(resourceObj && (resourceObj['free-hdd-space'] ?? resourceObj.freeHddSpace));
+  const diskTotal = parseBigIntish(resourceObj && (resourceObj['total-hdd-space'] ?? resourceObj.totalHddSpace));
 
   return {
     identityName,
     version,
-    board: buildBoardLabel(routerboard, resource),
+    board: buildBoardLabel(routerboardObj, resourceObj),
     uptime,
     cpuPercent,
     memoryFreeBytes: memFree,
@@ -291,19 +301,32 @@ async function attachLinkedClientsToPppSessions(tenantId, serverIdStr, sessions)
 
 async function persistServerSnapshot(tenantId, serverOid, base) {
   const ifList = Array.isArray(base.interfaces) ? base.interfaces : [];
+
+  const pickRx = (i) =>
+    i && i.rxBytes != null ? i.rxBytes
+      : i && i.rx != null ? i.rx
+      : i && i['rx-byte'] != null ? i['rx-byte']
+      : '';
+
+  const pickTx = (i) =>
+    i && i.txBytes != null ? i.txBytes
+      : i && i.tx != null ? i.tx
+      : i && i['tx-byte'] != null ? i['tx-byte']
+      : '';
+
   const topIf = ifList
     .map((i) => ({
       name: i.name || '',
-      rx: i.rx || i.rxBytes || '',
-      tx: i.tx || i.txBytes || '',
+      rx: pickRx(i),
+      tx: pickTx(i),
     }))
     .sort((a, b) => parseCounterLocal(b.rx) + parseCounterLocal(b.tx) - (parseCounterLocal(a.rx) + parseCounterLocal(a.tx)))
     .slice(0, 5);
 
   const interfaceTraffic = ifList.slice(0, 24).map((i) => ({
     name: i.name != null ? String(i.name).trim() : '',
-    rxBytes: i.rxBytes != null ? String(i.rxBytes) : i.rx != null ? String(i.rx) : '',
-    txBytes: i.txBytes != null ? String(i.txBytes) : i.tx != null ? String(i.tx) : '',
+    rxBytes: pickRx(i) != null ? String(pickRx(i)) : '',
+    txBytes: pickTx(i) != null ? String(pickTx(i)) : '',
   }));
 
   await MikrotikServerSnapshot.create({
@@ -523,6 +546,43 @@ exports.listServersWithMonitoring = async (tenantId, opts = {}) => {
     if (!s.isActive) {
       base.lastError = 'Servidor marcado como inactivo no cadastro.';
       applyOperationalAlertFields(base);
+
+      try {
+        await saveTelemetrySnapshot({
+          serverId: s._id,
+          serverName: s.name || '',
+          cpuPercent: base.cpuPercent || 0,
+
+          memoryPercent:
+            base.memoryTotalBytes && base.memoryFreeBytes != null
+              ? Math.round(
+                  100 -
+                    (base.memoryFreeBytes / base.memoryTotalBytes) * 100,
+                )
+              : 0,
+
+          pppOnline: base.activePppSessionsTotal || 0,
+
+          interfaces: (base.interfaces || []).slice(0, 12).map((i) => ({
+            name: i.name || '',
+            rxMbps: Number(i.rxMbps || 0),
+            txMbps: Number(i.txMbps || 0),
+            running: Boolean(i.running),
+          })),
+
+          metadata: {
+            monitoringChannel: base.monitoringChannel || '',
+            online: Boolean(base.online),
+            alerts: base.alertsCount || 0,
+          },
+        });
+      } catch (err) {
+        console.error(
+          '[mikrotikTelemetry] persist error:',
+          err && err.message ? err.message : err,
+        );
+      }
+
       return base;
     }
 
@@ -591,11 +651,18 @@ exports.listServersWithMonitoring = async (tenantId, opts = {}) => {
         if (remote.err) {
           throw new Error(remote.err);
         }
-        const raw = remote.json && remote.json.raw;
+        const raw = remote.json ? (remote.json.raw ?? remote.json) : null;
         if (!raw || typeof raw !== 'object') {
           throw new Error('REMOTE_SNAPSHOT_EMPTY');
         }
-        const norm = normalizeSnapshot(raw);
+        const norm = normalizeSnapshot({
+          identity: Array.isArray(raw.identity) ? raw.identity[0] : raw.identity,
+          resource: Array.isArray(raw.resource) ? raw.resource[0] : raw.resource,
+          routerboard: Array.isArray(raw.routerboard) ? raw.routerboard[0] : raw.routerboard,
+          interfaces: raw.interfaces,
+          pppSecretCount: raw.pppSecretCount,
+          pppActiveTotal: raw.pppActiveTotal,
+       });
         base.online = true;
         base.lastPolledAt = new Date().toISOString();
         base.identityName = norm.identityName;
@@ -622,7 +689,14 @@ exports.listServersWithMonitoring = async (tenantId, opts = {}) => {
     base.monitoringChannel = 'LOCAL_DIRECT';
     try {
       const raw = await withMikrotikConnection(serverLike, { timeoutMs }, async (api) => fetchOperationalSnapshot(api));
-      const norm = normalizeSnapshot(raw);
+      const norm = normalizeSnapshot({
+        identity: Array.isArray(raw.identity) ? raw.identity[0] : raw.identity,
+        resource: Array.isArray(raw.resource) ? raw.resource[0] : raw.resource,
+        routerboard: Array.isArray(raw.routerboard) ? raw.routerboard[0] : raw.routerboard,
+        interfaces: raw.interfaces,
+        pppSecretCount: raw.pppSecretCount,
+        pppActiveTotal: raw.pppActiveTotal,
+      });
       base.online = true;
       base.lastPolledAt = new Date().toISOString();
       base.identityName = norm.identityName;
@@ -837,7 +911,7 @@ exports.getServerMonitoringDetail = async (tenantId, serverId, opts = {}) => {
       if (remote.err) {
         throw new Error(remote.err);
       }
-      const raw = remote.json && remote.json.raw;
+      const raw = remote.json ? (remote.json.raw ?? remote.json) : null;
       if (!raw || typeof raw !== 'object') {
         throw new Error('REMOTE_SNAPSHOT_EMPTY');
       }
