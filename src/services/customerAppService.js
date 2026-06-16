@@ -12,6 +12,7 @@ const MikrotikTelemetrySnapshot = require('../models/MikrotikTelemetrySnapshot')
 const RemoteAgentCommand = require('../models/RemoteAgentCommand');
 const NetworkIncident = require('../models/NetworkIncident');
 const SupportTicket = require('../models/SupportTicket');
+const Notification = require('../models/Notification');
 
 function oid(value, field = 'id') {
   if (!mongoose.Types.ObjectId.isValid(String(value))) throw ApiError.badRequest(`${field} invalido`);
@@ -342,9 +343,10 @@ exports.getDashboard = async (tenantId, clientId) => {
 
 exports.getExecutiveDashboard = async (tenantId, clientId) => {
   const { tid, cid, client, plan } = await loadContext(tenantId, clientId);
-  const [invoices, openTickets] = await Promise.all([
+  const [invoices, openTickets, unreadNotifications] = await Promise.all([
     recentInvoices(tid, cid, 24),
     SupportTicket.countDocuments({ tenantId: tid, clientId: cid, status: { $in: ['open', 'in_progress'] } }),
+    Notification.countDocuments({ tenantId: tid, clientId: cid, isRead: false }),
   ]);
   const connection = await connectionSnapshot(tid, client, plan);
   const pendingInvoices = invoices.filter((i) => i.status === 'pending').length;
@@ -380,6 +382,9 @@ exports.getExecutiveDashboard = async (tenantId, clientId) => {
     },
     support: {
       openTickets: Number(openTickets || 0),
+    },
+    notifications: {
+      unreadCount: Number(unreadNotifications || 0),
     },
     connection: {
       lastUpdateAt: connection.lastUpdateAt || null,
