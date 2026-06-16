@@ -2,9 +2,12 @@ const router = require('express').Router();
 const customerAuth = require('../middlewares/customerAuthMiddleware');
 const customerAppController = require('../controllers/customerAppController');
 const customerAuthController = require('../controllers/customerAuthController');
+const customerOtpController = require('../controllers/customerOtpController');
 const customerNotificationController = require('../controllers/customerNotificationController');
 
 router.post('/auth/login', customerAuthController.login);
+router.post('/auth/request-otp', customerOtpController.requestOtp);
+router.post('/auth/verify-otp', customerOtpController.verifyOtp);
 
 router.use(customerAuth);
 

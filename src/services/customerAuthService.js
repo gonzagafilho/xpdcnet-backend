@@ -88,3 +88,8 @@ exports.me = async (client) => ({ client: safeClient(client) });
 
 exports.onlyDigits = onlyDigits;
 exports.CUSTOMER_TOKEN_EXPIRES_IN = CUSTOMER_TOKEN_EXPIRES_IN;
+
+exports.findClientForLogin = findClientForLogin;
+exports.signCustomerToken = signCustomerToken;
+exports.safeClient = safeClient;
+exports.BLOCKED_LOGIN_STATUSES = BLOCKED_LOGIN_STATUSES;
