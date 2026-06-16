@@ -194,6 +194,39 @@ function usageBucket(downloadBytes = 0, uploadBytes = 0) {
   return { downloadGB, uploadGB, totalGB: Number((downloadGB + uploadGB).toFixed(3)) };
 }
 
+function emptyPppoeLive(message = 'Sem dados PPPoE em tempo real.') {
+  return {
+    status: 'unknown',
+    downloadMbps: 0,
+    uploadMbps: 0,
+    currentIp: null,
+    uptime: null,
+    pingMs: 0,
+    jitterMs: 0,
+    packetLoss: 0,
+    lastUpdateAt: null,
+    source: 'empty',
+    message,
+  };
+}
+
+function pppoeLiveFromSession(session, sampledAt, status = 'online') {
+  const quality = sessionQuality(session);
+  return {
+    status,
+    downloadMbps: sessionDownloadMbps(session) || 0,
+    uploadMbps: sessionUploadMbps(session) || 0,
+    currentIp: session.address || session.remoteAddress || null,
+    uptime: session.uptime || null,
+    pingMs: quality.pingMs,
+    jitterMs: quality.jitterMs,
+    packetLoss: quality.packetLoss,
+    lastUpdateAt: sampledAt ? new Date(sampledAt).toISOString() : null,
+    source: 'snapshot',
+    message: '',
+  };
+}
+
 function timeLabel(value) {
   if (!value) return '';
   const date = new Date(value);
@@ -607,6 +640,7 @@ exports.getPppoe = async (tenantId, clientId) => {
   if (serverId) commandOr.push({ serverId });
   if (nodeId) commandOr.push({ networkNodeId: nodeId });
 
+  const since = addDays(new Date(), -2);
   const [commands, latestMetric, telemetrySnapshot] = await Promise.all([
     commandOr.length
       ? RemoteAgentCommand.find({
@@ -721,6 +755,70 @@ exports.getPppoe = async (tenantId, clientId) => {
   return base;
 };
 
+
+exports.getCustomerPppoeLive = async (tenantId, clientId) => {
+  const { tid, client, plan } = await loadContext(tenantId, clientId);
+  const authType = client.access?.authType || plan?.authType || 'pppoe';
+  const username = String(client.access?.username || '').trim();
+
+  if (authType !== 'pppoe') return emptyPppoeLive('Seu acesso cadastrado nao e PPPoE.');
+  if (!username) return emptyPppoeLive('Usuario PPPoE nao encontrado no cadastro.');
+
+  const serverId = client.mikrotik?.serverId || null;
+  const server = serverId
+    ? await MikrotikServer.findOne({ _id: serverId, tenantId: tid }).select('_id networkNodeId agentId').lean()
+    : null;
+  const nodeId = firstObjectId(client.networkNodeId, server?.networkNodeId, server?.agentId);
+  const commandOr = [];
+  if (client._id) commandOr.push({ clientId: client._id });
+  if (serverId) commandOr.push({ serverId });
+  if (nodeId) commandOr.push({ networkNodeId: nodeId });
+
+  if (!commandOr.length) return emptyPppoeLive('Sem vinculo de equipamento para localizar snapshots PPPoE.');
+
+  const since = addDays(new Date(), -2);
+  const commands = await RemoteAgentCommand.find({
+    tenantId: tid,
+    status: 'done',
+    resultSuccess: true,
+    kind: { $in: ['SERVER_SNAPSHOT_DETAIL', 'SERVER_SNAPSHOT', 'READ_PPP_ACTIVE'] },
+    $and: [
+      { $or: commandOr },
+      {
+        $or: [
+          { completedAt: { $gte: since } },
+          { updatedAt: { $gte: since } },
+          { createdAt: { $gte: since } },
+        ],
+      },
+    ],
+  })
+    .select('resultData completedAt updatedAt createdAt')
+    .sort({ completedAt: -1, updatedAt: -1, createdAt: -1 })
+    .limit(20)
+    .lean();
+
+  let latestCommandWithList = null;
+  for (const command of commands) {
+    const sampledAt = command.completedAt || command.updatedAt || command.createdAt;
+    const sessions = pppSessionsFromPayload(command.resultData);
+    if (sessions.length && !latestCommandWithList) latestCommandWithList = command;
+    const session = findSessionByUsername(sessions, username);
+    if (session) return pppoeLiveFromSession(session, sampledAt, 'online');
+  }
+
+  if (latestCommandWithList) {
+    const sampledAt = latestCommandWithList.completedAt || latestCommandWithList.updatedAt || latestCommandWithList.createdAt;
+    return {
+      ...emptyPppoeLive('Cliente PPPoE nao apareceu ativo na ultima leitura persistida.'),
+      status: 'offline',
+      lastUpdateAt: sampledAt ? new Date(sampledAt).toISOString() : null,
+      source: 'snapshot',
+    };
+  }
+
+  return emptyPppoeLive('Sem dados PPPoE em tempo real.');
+};
 
 exports.getCustomerPppoeHistory = async (tenantId, clientId) => {
   const { tid, client, plan } = await loadContext(tenantId, clientId);
