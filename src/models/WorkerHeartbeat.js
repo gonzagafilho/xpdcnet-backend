@@ -7,7 +7,7 @@ const WorkerHeartbeatSchema = new mongoose.Schema(
       required: true,
       unique: true,
       index: true,
-      enum: ['sync', 'finance', 'trust'],
+      enum: ['sync', 'finance', 'trust', 'telemetry', 'stale'],
     },
     status: {
       type: String,

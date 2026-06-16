@@ -3,6 +3,7 @@ require('dotenv').config();
 const mongoose = require('mongoose');
 const NetworkNode = require('../models/NetworkNode');
 const networkIncidentEngine = require('../services/networkIncidentEngine');
+const { markWorkerHeartbeat } = require('../services/workerTelemetryService');
 
 const LOG = '[networkIncidentStaleWorker]';
 
@@ -129,16 +130,33 @@ async function runOnce() {
   console.log(
     `${LOG} checked=${nodes.length} online=${counters.online} stale=${counters.stale} offline=${counters.offline} error=${counters.error}`
   );
+
+  return {
+    checked: nodes.length,
+    ...counters,
+  };
 }
 
 async function main() {
   console.log(`${LOG} iniciado interval=${INTERVAL_MS} stale=${AGENT_STALE_MS} offline=${AGENT_OFFLINE_MS}`);
 
   while (true) {
+    const startedAt = Date.now();
     try {
-      await runOnce();
+      const summary = await runOnce();
+      await markWorkerHeartbeat('stale', {
+        success: true,
+        status: summary.error > 0 ? 'degraded' : 'online',
+        lastDurationMs: Date.now() - startedAt,
+        metadata: summary,
+      });
     } catch (err) {
-      console.error(`${LOG} erro geral:`, err.message);
+      console.error(`${LOG} erro geral:`, err && err.message ? err.message : err);
+      await markWorkerHeartbeat('stale', {
+        status: 'degraded',
+        errorMessage: err && err.message ? err.message : String(err),
+        lastDurationMs: Date.now() - startedAt,
+      }).catch(() => {});
     }
 
     await sleep(INTERVAL_MS);

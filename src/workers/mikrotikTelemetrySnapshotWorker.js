@@ -4,6 +4,7 @@ const mongoose = require('mongoose');
 const connectDB = require('../config/db');
 const MikrotikServer = require('../models/MikrotikServer');
 const mikrotikServerMonitoringService = require('../services/mikrotikServerMonitoringService');
+const { markWorkerHeartbeat } = require('../services/workerTelemetryService');
 
 const LOG = '[mikrotikTelemetrySnapshotWorker]';
 
@@ -63,16 +64,36 @@ async function runOnce() {
   console.log(
     `${LOG} tenants=${tenantsChecked}/${tenantIds.length} servers=${serversChecked} online=${onlineServers} offline=${offlineServers} intervalMs=${INTERVAL_MS}`
   );
+
+  return {
+    tenantsTotal: tenantIds.length,
+    tenantsChecked,
+    serversChecked,
+    onlineServers,
+    offlineServers,
+  };
 }
 
 async function main() {
   console.log(`${LOG} iniciado interval=${INTERVAL_MS} timeout=${TIMEOUT_MS}`);
 
   while (true) {
+    const startedAt = Date.now();
     try {
-      await runOnce();
+      const summary = await runOnce();
+      await markWorkerHeartbeat('telemetry', {
+        success: true,
+        status: 'online',
+        lastDurationMs: Date.now() - startedAt,
+        metadata: summary,
+      });
     } catch (err) {
       console.error(`${LOG} erro geral:`, err && err.message ? err.message : err);
+      await markWorkerHeartbeat('telemetry', {
+        status: 'degraded',
+        errorMessage: err && err.message ? err.message : String(err),
+        lastDurationMs: Date.now() - startedAt,
+      }).catch(() => {});
     }
 
     await sleep(INTERVAL_MS);

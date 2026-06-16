@@ -1,5 +1,7 @@
 const WorkerHeartbeat = require('../models/WorkerHeartbeat');
 
+const WORKER_NAMES = ['sync', 'finance', 'trust', 'telemetry', 'stale'];
+
 const WORKER_ONLINE_MS = Math.max(
   30_000,
   Number(process.env.WORKER_HEARTBEAT_ONLINE_MS || 180_000),
@@ -48,12 +50,12 @@ async function markWorkerHeartbeat(worker, payload = {}) {
 async function getWorkerTelemetry() {
   const now = Date.now();
   const rows = await WorkerHeartbeat.find({
-    worker: { $in: ['sync', 'finance', 'trust'] },
+    worker: { $in: WORKER_NAMES },
   }).lean();
 
   const byWorker = {};
 
-  for (const name of ['sync', 'finance', 'trust']) {
+  for (const name of WORKER_NAMES) {
     const row = rows.find((item) => item.worker === name);
     const lastSeenAt = row?.lastSeenAt ? new Date(row.lastSeenAt).getTime() : 0;
     const ageMs = lastSeenAt ? now - lastSeenAt : null;
@@ -77,6 +79,7 @@ async function getWorkerTelemetry() {
 }
 
 module.exports = {
+  WORKER_NAMES,
   WORKER_ONLINE_MS,
   WORKER_IDLE_MS,
   markWorkerHeartbeat,
