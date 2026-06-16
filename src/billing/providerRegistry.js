@@ -1,7 +1,10 @@
 const CoraBillingAdapter = require('./adapters/coraBillingAdapter');
+const BolepixBillingAdapter = require('./adapters/bolepixBillingAdapter');
 
-const REGISTRY = Object.freeze({ cora: () => new CoraBillingAdapter() });
-const RESERVED_ADAPTER_KEYS = Object.freeze(['bolepix']);
+const REGISTRY = Object.freeze({
+  cora: () => new CoraBillingAdapter(),
+  bolepix: () => new BolepixBillingAdapter(),
+});
 
 exports.resolveAdapter = (adapterKey) => {
   const key = String(adapterKey || '').trim().toLowerCase();
@@ -9,4 +12,4 @@ exports.resolveAdapter = (adapterKey) => {
   return f ? f() : null;
 };
 
-exports.listAdapterKeys = () => [...Object.keys(REGISTRY), ...RESERVED_ADAPTER_KEYS];
+exports.listAdapterKeys = () => Object.keys(REGISTRY);
