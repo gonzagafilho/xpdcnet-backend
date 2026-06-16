@@ -7,6 +7,10 @@ const BillingInvoice = require('../models/billing/BillingInvoice');
 const MikrotikServer = require('../models/MikrotikServer');
 const MikrotikServerSnapshot = require('../models/MikrotikServerSnapshot');
 const NetworkNode = require('../models/NetworkNode');
+const NetworkNodeMetric = require('../models/NetworkNodeMetric');
+const MikrotikTelemetrySnapshot = require('../models/MikrotikTelemetrySnapshot');
+const RemoteAgentCommand = require('../models/RemoteAgentCommand');
+const NetworkIncident = require('../models/NetworkIncident');
 const SupportTicket = require('../models/SupportTicket');
 
 function oid(value, field = 'id') {
@@ -20,6 +24,36 @@ function limitFromQuery(query = {}) {
 
 function trim(value, max) {
   return String(value == null ? '' : value).trim().slice(0, max);
+}
+
+
+function maskAccessUsername(value) {
+  const username = String(value == null ? '' : value).trim();
+  if (!username) return '';
+  if (username.length <= 2) return `${username.slice(0, 1)}***`;
+  if (username.length <= 5) return `${username.slice(0, 2)}***`;
+  return `${username.slice(0, 2)}***${username.slice(-2)}`;
+}
+
+function roundMetric(value) {
+  if (value == null || Number.isNaN(Number(value))) return null;
+  return Number(Number(value).toFixed(2));
+}
+
+function latestDate(...values) {
+  const dates = values
+    .filter(Boolean)
+    .map((value) => new Date(value))
+    .filter((value) => !Number.isNaN(value.getTime()))
+    .sort((a, b) => b.getTime() - a.getTime());
+  return dates[0] || null;
+}
+
+function firstObjectId(...values) {
+  for (const value of values) {
+    if (value && mongoose.Types.ObjectId.isValid(String(value))) return value;
+  }
+  return null;
 }
 
 function safeClient(client) {
@@ -111,6 +145,18 @@ function basicAlerts(client, invoices = [], connection = null) {
   return alerts;
 }
 
+function mergeAlerts(...groups) {
+  const seen = new Set();
+  const merged = [];
+  for (const alert of groups.flat().filter(Boolean)) {
+    const key = `${alert.type || ''}:${alert.message || ''}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    merged.push(alert);
+  }
+  return merged;
+}
+
 async function loadContext(tenantId, clientId) {
   const tid = oid(tenantId, 'tenantId');
   const cid = oid(clientId, 'clientId');
@@ -134,21 +180,82 @@ async function billingByInvoiceIds(tenantId, invoiceIds) {
   return map;
 }
 
-async function connectionSnapshot(tenantId, client) {
+async function connectionSnapshot(tenantId, client, plan = null) {
   const serverId = client.mikrotik?.serverId || null;
-  const nodeId = client.networkNodeId || null;
-  const [server, node, latestSnapshot] = await Promise.all([
-    serverId ? MikrotikServer.findOne({ _id: serverId, tenantId }).select('_id name host isActive networkNodeId').lean() : null,
-    nodeId ? NetworkNode.findOne({ _id: nodeId, tenantId }).select('_id name code status agentLastSeenAt healthLevel healthScore').lean() : null,
+  const server = serverId
+    ? await MikrotikServer.findOne({ _id: serverId, tenantId }).select('_id name isActive networkNodeId agentId').lean()
+    : null;
+  const nodeId = firstObjectId(client.networkNodeId, server?.networkNodeId, server?.agentId);
+
+  const telemetryIds = [serverId, nodeId].filter(Boolean);
+  const [node, latestSnapshot, latestMetric, telemetrySnapshot, lastCommand, openIncident] = await Promise.all([
+    nodeId ? NetworkNode.findOne({ _id: nodeId, tenantId }).select('_id name status agentLastSeenAt healthLevel healthScore').lean() : null,
     serverId ? MikrotikServerSnapshot.findOne({ tenantId, serverId }).sort({ generatedAt: -1, createdAt: -1 }).lean() : null,
+    nodeId ? NetworkNodeMetric.findOne({ tenantId: String(tenantId), nodeId }).sort({ sampledAt: -1, createdAt: -1 }).lean() : null,
+    telemetryIds.length ? MikrotikTelemetrySnapshot.findOne({ serverId: { $in: telemetryIds } }).sort({ createdAt: -1 }).lean() : null,
+    nodeId || serverId || client._id
+      ? RemoteAgentCommand.findOne({
+          tenantId,
+          ...(client._id ? { clientId: client._id } : {}),
+          ...(nodeId ? { networkNodeId: nodeId } : {}),
+          ...(serverId ? { serverId } : {}),
+        })
+          .select('kind status resultSuccess completedAt updatedAt createdAt')
+          .sort({ updatedAt: -1, createdAt: -1 })
+          .lean()
+      : null,
+    nodeId
+      ? NetworkIncident.findOne({ tenantId: String(tenantId), nodeId, status: 'open' })
+          .select('type severity title message startedAt lastSeenAt')
+          .sort({ lastSeenAt: -1, startedAt: -1 })
+          .lean()
+      : null,
   ]);
 
-  const online = latestSnapshot ? Boolean(latestSnapshot.online) : null;
-  const activePppTotal = latestSnapshot?.activePppTotal != null ? Number(latestSnapshot.activePppTotal) : null;
+  const statusSource = latestSnapshot
+    ? latestSnapshot.online
+    : node?.status || latestMetric?.status || null;
+  const status = typeof statusSource === 'boolean'
+    ? statusSource ? 'online' : 'offline'
+    : ['online', 'offline'].includes(String(statusSource)) ? String(statusSource) : 'unknown';
+  const activePppTotal = latestSnapshot?.activePppTotal != null ? Number(latestSnapshot.activePppTotal) : latestMetric?.pppOnlineCount ?? telemetrySnapshot?.pppOnline ?? null;
   const pppSecretCount = latestSnapshot?.pppSecretCount != null ? Number(latestSnapshot.pppSecretCount) : null;
+  const lastSignalAt = latestMetric?.sampledAt || telemetrySnapshot?.createdAt || null;
+  const lastUpdateAt = latestDate(
+    latestSnapshot?.generatedAt,
+    latestSnapshot?.createdAt,
+    latestMetric?.sampledAt,
+    telemetrySnapshot?.createdAt,
+    node?.agentLastSeenAt,
+    lastCommand?.completedAt,
+    lastCommand?.updatedAt,
+  );
+  const alerts = [];
+
+  if (latestSnapshot?.lastError) {
+    alerts.push({ type: 'monitoring', severity: 'warning', message: 'Ultima leitura de conexao registrou erro.' });
+  }
+  if (status === 'offline') {
+    alerts.push({ type: 'connection_offline', severity: 'warning', message: 'Conexao sem sessao online detectada na ultima leitura disponivel.' });
+  }
+  if (telemetrySnapshot && ['warning', 'critical'].includes(String(telemetrySnapshot.health))) {
+    alerts.push({ type: 'telemetry', severity: telemetrySnapshot.health === 'critical' ? 'critical' : 'warning', message: 'Equipamento com sinal de atencao na ultima telemetria.' });
+  }
+  if (openIncident) {
+    alerts.push({
+      type: openIncident.type || 'incident',
+      severity: openIncident.severity || 'warning',
+      message: trim(openIncident.title || openIncident.message || 'Incidente operacional em acompanhamento.', 120),
+    });
+  }
 
   return {
-    status: online === null ? 'unknown' : online ? 'online' : 'offline',
+    status,
+    plan: safePlan(plan),
+    access: {
+      authType: client.access?.authType || plan?.authType || 'pppoe',
+      usernameMasked: maskAccessUsername(client.access?.username),
+    },
     server: server
       ? {
           _id: String(server._id),
@@ -166,11 +273,32 @@ async function connectionSnapshot(tenantId, client) {
           agentLastSeenAt: node.agentLastSeenAt || null,
         }
       : null,
-    lastSession: latestSnapshot
+    lastSession: latestSnapshot || latestMetric || telemetrySnapshot
       ? {
-          sampledAt: latestSnapshot.generatedAt || latestSnapshot.createdAt || null,
-          activePppTotal,
+          sampledAt: latestSnapshot?.generatedAt || latestSnapshot?.createdAt || latestMetric?.sampledAt || telemetrySnapshot?.createdAt || null,
+          activePppTotal: activePppTotal != null ? Number(activePppTotal) : null,
           pppSecretCount,
+        }
+      : null,
+    lastSignal: latestMetric || telemetrySnapshot
+      ? {
+          sampledAt: lastSignalAt,
+          source: latestMetric ? 'network_metric' : 'telemetry',
+          health: telemetrySnapshot?.health || node?.healthLevel || null,
+          cpuPercent: roundMetric(latestMetric?.cpuLoad ?? telemetrySnapshot?.cpuPercent),
+          pppOnline: activePppTotal != null ? Number(activePppTotal) : null,
+          totalRxMbps: roundMetric(latestMetric?.totalRxMbps),
+          totalTxMbps: roundMetric(latestMetric?.totalTxMbps),
+        }
+      : null,
+    lastUpdateAt: lastUpdateAt ? lastUpdateAt.toISOString() : null,
+    lastCommand: lastCommand
+      ? {
+          kind: lastCommand.kind || '',
+          status: lastCommand.status || '',
+          success: lastCommand.resultSuccess,
+          completedAt: lastCommand.completedAt || null,
+          updatedAt: lastCommand.updatedAt || null,
         }
       : null,
     mikrotikSync: {
@@ -179,7 +307,7 @@ async function connectionSnapshot(tenantId, client) {
       lastSuccessAt: client.mikrotik?.sync?.lastSuccessAt || client.mikrotik?.syncedAt || null,
       lastAttemptAt: client.mikrotik?.sync?.lastAttemptAt || null,
     },
-    alerts: latestSnapshot && latestSnapshot.lastError ? [{ type: 'monitoring', severity: 'warning', message: 'Ultima leitura de conexao registrou erro.' }] : [],
+    alerts,
   };
 }
 
@@ -187,7 +315,7 @@ exports.getDashboard = async (tenantId, clientId) => {
   const { tid, cid, client, plan } = await loadContext(tenantId, clientId);
   const invoices = await recentInvoices(tid, cid, 12);
   const billingMap = await billingByInvoiceIds(tid, invoices.map((i) => i._id));
-  const connection = await connectionSnapshot(tid, client);
+  const connection = await connectionSnapshot(tid, client, plan);
   const nextInvoice = invoices
     .filter((i) => ['pending', 'overdue'].includes(i.status))
     .sort((a, b) => new Date(a.dueDate) - new Date(b.dueDate))[0] || null;
@@ -208,7 +336,7 @@ exports.getDashboard = async (tenantId, clientId) => {
       nextInvoice: nextInvoice ? invoiceSummary(nextInvoice, billingMap.get(String(nextInvoice._id))) : null,
     },
     connection,
-    alerts: basicAlerts(client, invoices, connection).concat(connection.alerts || []),
+    alerts: mergeAlerts(basicAlerts(client, invoices, connection), connection.alerts || []),
   };
 };
 
@@ -225,8 +353,8 @@ exports.getPlan = async (tenantId, clientId) => {
 };
 
 exports.getConnection = async (tenantId, clientId) => {
-  const { tid, client } = await loadContext(tenantId, clientId);
-  return connectionSnapshot(tid, client);
+  const { tid, client, plan } = await loadContext(tenantId, clientId);
+  return connectionSnapshot(tid, client, plan);
 };
 
 exports.listInvoices = async (tenantId, clientId, query = {}) => {
