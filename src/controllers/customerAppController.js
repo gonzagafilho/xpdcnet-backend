@@ -16,6 +16,14 @@ exports.getMe = async (req, res, next) => {
   }
 };
 
+exports.getExecutiveDashboard = async (req, res, next) => {
+  try {
+    res.json(await customerAppService.getExecutiveDashboard(tenantId(req), clientId(req)));
+  } catch (err) {
+    next(err);
+  }
+};
+
 exports.getPlan = async (req, res, next) => {
   try {
     res.json(await customerAppService.getPlan(tenantId(req), clientId(req)));

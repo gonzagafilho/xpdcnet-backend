@@ -340,6 +340,53 @@ exports.getDashboard = async (tenantId, clientId) => {
   };
 };
 
+exports.getExecutiveDashboard = async (tenantId, clientId) => {
+  const { tid, cid, client, plan } = await loadContext(tenantId, clientId);
+  const [invoices, openTickets] = await Promise.all([
+    recentInvoices(tid, cid, 24),
+    SupportTicket.countDocuments({ tenantId: tid, clientId: cid, status: { $in: ['open', 'in_progress'] } }),
+  ]);
+  const connection = await connectionSnapshot(tid, client, plan);
+  const pendingInvoices = invoices.filter((i) => i.status === 'pending').length;
+  const overdueInvoices = invoices.filter((i) => i.status === 'overdue').length;
+  const nextInvoice = invoices
+    .filter((i) => ['pending', 'overdue'].includes(i.status))
+    .sort((a, b) => new Date(a.dueDate || 0) - new Date(b.dueDate || 0))[0] || null;
+  const healthScore = connection.networkNode?.healthScore != null
+    ? Number(connection.networkNode.healthScore)
+    : connection.lastSignal?.health === 'critical' ? 40
+      : connection.lastSignal?.health === 'warning' ? 70
+        : connection.status === 'online' ? 100
+          : connection.status === 'offline' ? 0
+            : null;
+
+  return {
+    client: {
+      fullName: client.fullName || '',
+      status: client.status || '',
+    },
+    internet: {
+      status: connection.status,
+      healthScore,
+    },
+    plan: {
+      name: plan?.name || '',
+      speed: plan?.speedMbps ? `${Number(plan.speedMbps)} Mbps` : '',
+    },
+    billing: {
+      pendingInvoices,
+      nextDueDate: nextInvoice ? nextInvoice.dueDate : null,
+      overdueInvoices,
+    },
+    support: {
+      openTickets: Number(openTickets || 0),
+    },
+    connection: {
+      lastUpdateAt: connection.lastUpdateAt || null,
+    },
+  };
+};
+
 exports.getPlan = async (tenantId, clientId) => {
   const { client, plan } = await loadContext(tenantId, clientId);
   return {
