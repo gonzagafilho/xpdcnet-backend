@@ -9,7 +9,7 @@ const MAX_ATTEMPTS = 5;
 
 function normalize(payload = {}) {
   const documentDigits = customerAuthService.onlyDigits(payload.document);
-  const phoneDigits = customerAuthService.onlyDigits(payload.phone);
+  const phoneDigits = customerAuthService.onlyDigits(payload.phone || payload.whatsapp);
   if (!documentDigits) throw ApiError.badRequest('document e obrigatorio');
   if (!phoneDigits) throw ApiError.badRequest('phone e obrigatorio');
   if (documentDigits.length < 11 || documentDigits.length > 14) throw ApiError.badRequest('document invalido');
