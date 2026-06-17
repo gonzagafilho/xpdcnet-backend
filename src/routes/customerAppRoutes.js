@@ -16,6 +16,7 @@ router.get('/me', customerAppController.getMe);
 router.get('/dashboard', customerAppController.getExecutiveDashboard);
 router.get('/plan', customerAppController.getPlan);
 router.get('/connection', customerAppController.getConnection);
+router.get('/network-map', customerAppController.getNetworkMap);
 router.get('/pppoe', customerAppController.getPppoe);
 router.get('/pppoe/live', customerAppController.getPppoeLive);
 router.get('/pppoe/history', customerAppController.getPppoeHistory);

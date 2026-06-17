@@ -10,7 +10,10 @@ const NetworkNode = require('../models/NetworkNode');
 const NetworkNodeMetric = require('../models/NetworkNodeMetric');
 const MikrotikTelemetrySnapshot = require('../models/MikrotikTelemetrySnapshot');
 const RemoteAgentCommand = require('../models/RemoteAgentCommand');
+const PppoeLiveSnapshot = require('../models/PppoeLiveSnapshot');
 const NetworkIncident = require('../models/NetworkIncident');
+const NetworkTopologyLink = require('../models/NetworkTopologyLink');
+const NetworkTopologySnapshot = require('../models/NetworkTopologySnapshot');
 const SupportTicket = require('../models/SupportTicket');
 const Notification = require('../models/Notification');
 
@@ -224,6 +227,45 @@ function pppoeLiveFromSession(session, sampledAt, status = 'online') {
     lastUpdateAt: sampledAt ? new Date(sampledAt).toISOString() : null,
     source: 'snapshot',
     message: '',
+  };
+}
+
+function normalizeMapStatus(status) {
+  const value = String(status || '').toLowerCase();
+  if (['online', 'healthy', 'active', 'resolved'].includes(value)) return 'online';
+  if (['offline', 'critical', 'fatal', 'down'].includes(value)) return 'offline';
+  return 'unknown';
+}
+
+
+function nodeMapStatus(node, incident) {
+  if (incident && ['critical', 'fatal'].includes(String(incident.severity))) return 'offline';
+  if (incident) return 'unknown';
+  return normalizeMapStatus(node?.healthLevel || node?.status);
+}
+
+function buildNetworkMapPayload({ client, live, routerLabel, routerStatus, equipmentLabel, equipmentStatus, popStatus, lastUpdateAt, source = 'fallback', message = '' }) {
+  const customerStatus = normalizeMapStatus(live?.status);
+  const hasOfflinePath = [customerStatus, routerStatus, equipmentStatus, popStatus].map(normalizeMapStatus).includes('offline');
+  const overall = hasOfflinePath ? 'offline' : (customerStatus === 'online' ? 'online' : 'unknown');
+  return {
+    status: overall,
+    client: { name: 'Cliente' },
+    path: [
+      { type: 'internet', label: 'Internet', status: popStatus === 'offline' ? 'unknown' : 'online' },
+      { type: 'pop', label: 'POP DC NET', status: popStatus || 'unknown' },
+      { type: 'router', label: routerLabel || 'Servidor PPPoE / CCR', status: routerStatus || 'unknown' },
+      { type: 'olt', label: equipmentLabel || 'OLT / Equipamento', status: equipmentStatus || 'unknown' },
+      { type: 'customer', label: client?.address?.neighborhood ? 'Sua casa' : 'Cliente', status: customerStatus },
+    ],
+    quality: {
+      pingMs: live?.pingMs ?? 0,
+      jitterMs: live?.jitterMs ?? 0,
+      packetLoss: live?.packetLoss ?? 0,
+    },
+    lastUpdateAt: lastUpdateAt ? new Date(lastUpdateAt).toISOString() : null,
+    source,
+    message,
   };
 }
 
@@ -764,6 +806,27 @@ exports.getCustomerPppoeLive = async (tenantId, clientId) => {
   if (authType !== 'pppoe') return emptyPppoeLive('Seu acesso cadastrado nao e PPPoE.');
   if (!username) return emptyPppoeLive('Usuario PPPoE nao encontrado no cadastro.');
 
+  const liveSnapshot = await PppoeLiveSnapshot.findOne({
+    tenantId: String(tid),
+    pppoeUsername: username.toLowerCase(),
+  }).lean();
+
+  if (liveSnapshot) {
+    return {
+      status: liveSnapshot.status || 'unknown',
+      downloadMbps: roundMetric(liveSnapshot.downloadMbps) || 0,
+      uploadMbps: roundMetric(liveSnapshot.uploadMbps) || 0,
+      currentIp: liveSnapshot.currentIp || null,
+      uptime: liveSnapshot.uptime || null,
+      pingMs: roundMetric(liveSnapshot.pingMs) || 0,
+      jitterMs: roundMetric(liveSnapshot.jitterMs) || 0,
+      packetLoss: roundMetric(liveSnapshot.packetLoss) || 0,
+      lastUpdateAt: liveSnapshot.lastUpdateAt ? new Date(liveSnapshot.lastUpdateAt).toISOString() : null,
+      source: ['mikrotik', 'agent'].includes(String(liveSnapshot.source || '')) ? 'snapshot' : (liveSnapshot.source || 'snapshot'),
+      message: liveSnapshot.status === 'offline' ? 'Sessao PPPoE offline na ultima leitura real.' : '',
+    };
+  }
+
   const serverId = client.mikrotik?.serverId || null;
   const server = serverId
     ? await MikrotikServer.findOne({ _id: serverId, tenantId: tid }).select('_id networkNodeId agentId').lean()
@@ -818,6 +881,52 @@ exports.getCustomerPppoeLive = async (tenantId, clientId) => {
   }
 
   return emptyPppoeLive('Sem dados PPPoE em tempo real.');
+};
+
+exports.getCustomerNetworkMap = async (tenantId, clientId) => {
+  const { tid, client } = await loadContext(tenantId, clientId);
+  const live = await exports.getCustomerPppoeLive(tenantId, clientId);
+  const serverId = client.mikrotik?.serverId || null;
+  const server = serverId
+    ? await MikrotikServer.findOne({ _id: serverId, tenantId: tid }).select('_id name networkNodeId agentId').lean()
+    : null;
+  const nodeId = firstObjectId(client.networkNodeId, server?.networkNodeId, server?.agentId);
+
+  const [node, incident, link, topologySnapshot] = await Promise.all([
+    nodeId ? NetworkNode.findOne({ _id: nodeId, tenantId: tid }).select('name status healthLevel healthUpdatedAt agentLastSeenAt').lean() : null,
+    nodeId ? NetworkIncident.findOne({ tenantId: String(tid), nodeId, status: 'open' }).sort({ severity: -1, startedAt: -1 }).lean() : null,
+    nodeId ? NetworkTopologyLink.findOne({ tenantId: tid, isActive: true, $or: [{ fromNodeId: nodeId }, { toNodeId: nodeId }] }).sort({ lastSampleAt: -1, updatedAt: -1 }).lean() : null,
+    NetworkTopologySnapshot.findOne({ tenantId: tid }).sort({ sampledAt: -1, createdAt: -1 }).lean(),
+  ]);
+
+  const routerLabel = 'Servidor PPPoE / CCR';
+  const routerStatus = nodeMapStatus(node, incident);
+  const equipmentLabel = 'OLT / Equipamento';
+  const equipmentStatus = link ? normalizeMapStatus(link.status || link.healthLevel) : 'unknown';
+  const popStatus = topologySnapshot ? normalizeMapStatus(topologySnapshot.topologyHealthLevel) : (node ? routerStatus : 'unknown');
+  const lastUpdateAt = latestDate(
+    live?.lastUpdateAt,
+    link?.lastSampleAt,
+    topologySnapshot?.sampledAt,
+    node?.healthUpdatedAt,
+    node?.agentLastSeenAt,
+  );
+  const hasRealPathData = Boolean(node || server || link || topologySnapshot);
+
+  return buildNetworkMapPayload({
+    client,
+    live,
+    routerLabel,
+    routerStatus,
+    equipmentLabel,
+    equipmentStatus,
+    popStatus,
+    lastUpdateAt,
+    source: hasRealPathData ? 'snapshot' : 'fallback',
+    message: hasRealPathData
+      ? ''
+      : 'Mapa simplificado exibido com base nos dados disponíveis da sua conexão.',
+  });
 };
 
 exports.getCustomerPppoeHistory = async (tenantId, clientId) => {
