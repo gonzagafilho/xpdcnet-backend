@@ -1,8 +1,7 @@
 const router = require('express').Router();
 const auth = require('../middlewares/authMiddleware');
 const isAdmin = require('../middlewares/isAdmin');
-const controller = require('../controllers/bolepixAdController');
-
+const controller = require('../controllers/partnerAdController');
 router.use(auth, isAdmin);
 router.get('/', controller.list);
 router.get('/stats', controller.stats);
@@ -10,5 +9,4 @@ router.post('/', controller.create);
 router.put('/:id', controller.update);
 router.patch('/:id/active', controller.setActive);
 router.delete('/:id', controller.remove);
-
 module.exports = router;

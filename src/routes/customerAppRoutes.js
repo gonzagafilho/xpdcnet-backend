@@ -5,6 +5,7 @@ const customerAuthController = require('../controllers/customerAuthController');
 const customerOtpController = require('../controllers/customerOtpController');
 const customerNotificationController = require('../controllers/customerNotificationController');
 const bolepixAdController = require('../controllers/bolepixAdController');
+const partnerAdController = require('../controllers/partnerAdController');
 
 router.post('/auth/login', customerAuthController.login);
 router.post('/auth/request-otp', customerOtpController.requestOtp);
@@ -25,6 +26,9 @@ router.get('/pppoe/history', customerAppController.getPppoeHistory);
 router.get('/invoices', customerAppController.listInvoices);
 router.get('/invoices/:id/payment', customerAppController.getInvoicePayment);
 router.get('/bolepix-ad', bolepixAdController.getActiveForCustomer);
+router.post('/bolepix-ad/:id/click', bolepixAdController.recordClickForCustomer);
+router.get('/bolepix-partners', partnerAdController.customerList);
+router.post('/bolepix-partners/:id/click', partnerAdController.customerClick);
 
 router.get('/notifications', customerNotificationController.listNotifications);
 router.get('/notifications/unread-count', customerNotificationController.unreadCount);

@@ -31,11 +31,13 @@ const systemSetupRoutes = require('./routes/systemSetupRoutes');
 const requireMikrotikCryptoConfigured = require('./middlewares/requireMikrotikCryptoConfigured');
 const bolepixRoutes = require('./routes/billing/bolepixRoutes');
 const bolepixAdRoutes = require('./routes/bolepixAdRoutes');
+const partnerAdRoutes = require('./routes/partnerAdRoutes');
 
 const app = express();
 
 app.use(cors());
 app.use('/bolepix-ads', express.json({ limit: '7mb' }));
+app.use('/bolepix-partners', express.json({ limit: '7mb' }));
 app.use(express.json());
 app.use('/uploads', express.static(path.resolve(__dirname, '../uploads'), { maxAge: '7d', immutable: true }));
 
@@ -70,6 +72,7 @@ app.use('/billing', tenantMiddleware, billingRoutes);
 
 app.use('/api/bolepix', bolepixRoutes);
 app.use('/bolepix-ads', tenantMiddleware, bolepixAdRoutes);
+app.use('/bolepix-partners', tenantMiddleware, partnerAdRoutes);
 app.use('/customer-app', tenantMiddleware, customerAppRoutes);
 app.use('/billing-admin', tenantMiddleware, billingAdminRoutes);
 app.use('/operations', tenantMiddleware, operationsReadRoutes);
