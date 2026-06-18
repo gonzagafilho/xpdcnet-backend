@@ -34,4 +34,4 @@ const BillingInvoiceSchema = new mongoose.Schema(
 BillingInvoiceSchema.index({ tenantId: 1, billingAccountId: 1, providerChargeId: 1 }, { unique: true });
 BillingInvoiceSchema.index({ tenantId: 1, invoiceId: 1, billingAccountId: 1 });
 
-module.exports = mongoose.model('BillingInvoice', BillingInvoiceSchema);
+module.exports = mongoose.model('BillingInvoice', BillingInvoiceSchema, 'invoices');

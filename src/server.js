@@ -4,11 +4,13 @@ const http = require('http');
 const app = require('./app');
 const connectDB = require('./config/db');
 const { initRealtime } = require('./realtime/socketServer');
+const { startBolepixReconcileJob } = require('./jobs/bolepixReconcileJob');
 
 const PORT = process.env.PORT || 3000;
 
 (async () => {
   const dbOk = await connectDB();
+
   if (!dbOk) {
     console.warn('[API] Servidor a iniciar sem ligação à base de dados (modo degradado).');
   } else {
@@ -22,13 +24,15 @@ const PORT = process.env.PORT || 3000;
 
   const server = http.createServer(app);
 
-initRealtime(server);
+  initRealtime(server);
 
-server.listen(PORT, () => {
-  const mode = process.env.SYSTEM_MODE || 'production';
+  server.listen(PORT, () => {
+    startBolepixReconcileJob();
 
-  console.log(
-    `[API] XPDCNET API rodando na porta ${PORT} (SYSTEM_MODE=${mode})`
-  );
-});
+    const mode = process.env.SYSTEM_MODE || 'production';
+
+    console.log(
+      `[API] XPDCNET API rodando na porta ${PORT} (SYSTEM_MODE=${mode})`
+    );
+  });
 })();

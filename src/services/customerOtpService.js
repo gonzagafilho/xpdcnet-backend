@@ -3,6 +3,8 @@ const ApiError = require('../errors/ApiError');
 const CustomerOtp = require('../models/CustomerOtp');
 const { getJwtSecret } = require('../config/jwt');
 const customerAuthService = require('./customerAuthService');
+const customerOtpWhatsAppService = require('./customerOtpWhatsAppService');
+const customerTrustedDeviceService = require('./customerTrustedDeviceService');
 
 const OTP_TTL_MS = 5 * 60 * 1000;
 const MAX_ATTEMPTS = 5;
@@ -74,13 +76,20 @@ exports.requestOtp = async (tenantId, payload = {}) => {
     maxAttempts: MAX_ATTEMPTS,
   });
 
+  try {
+    await customerOtpWhatsAppService.sendCustomerOtp(phoneDigits, code);
+  } catch (err) {
+    if (!canExposeDevCode()) throw err;
+    console.warn('[customer_otp] whatsapp_send_failed_dev_mode', err?.message || String(err));
+  }
+
   const response = { ok: true, message: 'Codigo enviado para o WhatsApp informado.' };
   if (canExposeDevCode()) response.devCode = code;
   return response;
 };
 
-exports.verifyOtp = async (tenantId, payload = {}) => {
-  const { client, phoneDigits } = await resolveClient(tenantId, payload);
+exports.verifyOtp = async (tenantId, payload = {}, options = {}) => {
+  const { client, documentDigits, phoneDigits } = await resolveClient(tenantId, payload);
   const code = normalizeCode(payload.code);
   const now = new Date();
 
@@ -110,8 +119,24 @@ exports.verifyOtp = async (tenantId, payload = {}) => {
 
   await CustomerOtp.updateOne({ _id: otp._id }, { $set: { usedAt: now }, $inc: { attempts: 1 } });
 
-  return {
+  const response = {
     token: customerAuthService.signCustomerToken(client, tenantId),
     client: customerAuthService.safeClient(client),
   };
+
+  if (payload.rememberDevice === true) {
+    const trustedDevice = await customerTrustedDeviceService.createTrustedDevice({
+      tenantId,
+      client,
+      documentDigits,
+      phoneDigits,
+      userAgent: options.userAgent,
+    });
+    response.trustedDeviceToken = trustedDevice.trustedDeviceToken;
+    response.trustedDeviceExpiresAt = trustedDevice.trustedDeviceExpiresAt;
+  }
+
+  return response;
 };
+
+exports.trustedDeviceLogin = async (tenantId, payload = {}, options = {}) => customerTrustedDeviceService.loginWithTrustedDevice(tenantId, payload, options);

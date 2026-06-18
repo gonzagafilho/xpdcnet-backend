@@ -16,6 +16,8 @@ const NetworkTopologyLink = require('../models/NetworkTopologyLink');
 const NetworkTopologySnapshot = require('../models/NetworkTopologySnapshot');
 const SupportTicket = require('../models/SupportTicket');
 const Notification = require('../models/Notification');
+const PaymentGatewayTransaction = require('../models/billing/PaymentGatewayTransaction');
+const mercadoPagoPixService = require('./billing/mercadoPagoPixService');
 
 function oid(value, field = 'id') {
   if (!mongoose.Types.ObjectId.isValid(String(value))) throw ApiError.badRequest(`${field} invalido`);
@@ -287,9 +289,14 @@ function safeClient(client) {
     dueDay: client.dueDay || null,
     monthlyPrice: Number(client.monthlyPrice || 0),
     address: {
+      zip: client.address?.zip || '',
+      cep: client.address?.zip || '',
+      street: client.address?.street || '',
+      number: client.address?.number || '',
+      neighborhood: client.address?.neighborhood || '',
       city: client.address?.city || '',
       state: client.address?.state || '',
-      neighborhood: client.address?.neighborhood || '',
+      reference: client.address?.reference || '',
     },
     createdAt: client.createdAt || null,
   };
@@ -348,6 +355,34 @@ function safeBillingInvoiceForPayment(billing) {
     boletoUrl: billing.boletoUrl || '',
     boletoBarcode: billing.boletoBarcode || '',
     updatedAt: billing.updatedAt || null,
+  };
+}
+
+
+function safeBolepixTransactionForPayment(tx) {
+  if (!tx) return null;
+
+  const qrCodeBase64 = tx.qrCodeBase64 || '';
+  const pixQrCodeUrl = qrCodeBase64
+    ? `data:image/png;base64,${qrCodeBase64}`
+    : '';
+
+  return {
+    _id: String(tx._id),
+    providerChargeId: tx.externalId || '',
+    providerStatus: tx.status || '',
+    internalStatus: tx.status === 'approved' || tx.status === 'paid' ? 'paid' : 'pending',
+    gateway: tx.gateway || 'mercadopago',
+    amount: Number(tx.amountCents || 0) / 100,
+    dueDate: tx.dueDate || null,
+    paidAt: tx.paidAt || null,
+    checkoutUrl: tx.ticketUrl || '',
+    pixPayload: tx.qrCode || '',
+    pixCopyPaste: tx.qrCode || '',
+    pixQrCodeUrl,
+    boletoUrl: tx.ticketUrl || '',
+    boletoBarcode: '',
+    updatedAt: tx.updatedAt || null,
   };
 }
 
@@ -1060,11 +1095,25 @@ exports.getInvoicePayment = async (tenantId, clientId, invoiceId) => {
   const { tid, cid } = await loadContext(tenantId, clientId);
   const invoice = await Invoice.findOne({ _id: oid(invoiceId), tenantId: tid, clientId: cid }).lean();
   if (!invoice) throw ApiError.notFound('Fatura nao encontrada');
+
   const billing = await BillingInvoice.findOne({ tenantId: tid, invoiceId: invoice._id }).sort({ updatedAt: -1 }).lean();
+
+  let bolepix = await PaymentGatewayTransaction.findOne({
+    gateway: 'mercadopago',
+    invoiceId: invoice._id,
+    status: { $in: ['pending', 'in_process', 'approved', 'paid'] },
+  }).sort({ updatedAt: -1 }).lean();
+
+  if (!bolepix && ['pending', 'overdue'].includes(String(invoice.status || '').toLowerCase())) {
+    bolepix = await mercadoPagoPixService.createPixForInvoice(invoice._id);
+  }
+
+  const payment = safeBolepixTransactionForPayment(bolepix) || safeBillingInvoiceForPayment(billing);
+
   return {
-    invoice: invoiceSummary(invoice, billing),
-    payment: safeBillingInvoiceForPayment(billing),
-    canIssueNewCharge: false,
+    invoice: invoiceSummary(invoice, billing || bolepix),
+    payment,
+    canIssueNewCharge: !payment,
   };
 };
 

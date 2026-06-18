@@ -1,4 +1,5 @@
 const express = require('express');
+const path = require('path');
 const cors = require('cors');
 
 const tenantMiddleware = require('./middlewares/tenantMiddleware');
@@ -16,6 +17,7 @@ const mikrotikServerRoutes = require('./routes/mikrotikServerRoutes');
 const mikrotikSyncRoutes = require('./routes/mikrotikSyncRoutes');
 const mikrotikMonitoringRoutes = require('./routes/mikrotikMonitoringRoutes');
 const networkNodeRoutes = require('./routes/networkNodeRoutes');
+const networkConcentratorRoutes = require('./routes/networkConcentratorRoutes');
 const remoteAgentRoutes = require('./routes/remoteAgentRoutes');
 const agentCompatRoutes = require('./routes/agentCompatRoutes');
 const systemHealthRoutes = require('./routes/systemHealthRoutes');
@@ -27,11 +29,15 @@ const monitoringBoardRoutes = require('./routes/monitoringBoardRoutes');
 const networkTopologyRoutes = require('./routes/networkTopologyRoutes');
 const systemSetupRoutes = require('./routes/systemSetupRoutes');
 const requireMikrotikCryptoConfigured = require('./middlewares/requireMikrotikCryptoConfigured');
+const bolepixRoutes = require('./routes/billing/bolepixRoutes');
+const bolepixAdRoutes = require('./routes/bolepixAdRoutes');
 
 const app = express();
 
 app.use(cors());
+app.use('/bolepix-ads', express.json({ limit: '7mb' }));
 app.use(express.json());
+app.use('/uploads', express.static(path.resolve(__dirname, '../uploads'), { maxAge: '7d', immutable: true }));
 
 app.get('/health', healthController.getHealth);
 app.get('/health/live', healthController.getLive);
@@ -56,10 +62,14 @@ app.use('/mikrotik/servers', tenantMiddleware, requireMikrotikCryptoConfigured, 
 app.use('/mikrotik-sync', tenantMiddleware, requireMikrotikCryptoConfigured, mikrotikSyncRoutes);
 app.use('/mikrotik-monitoring', tenantMiddleware, requireMikrotikCryptoConfigured, mikrotikMonitoringRoutes);
 app.use('/network-nodes', tenantMiddleware, networkNodeRoutes);
+app.use('/api/admin/network/concentrators', tenantMiddleware, networkConcentratorRoutes);
 app.use('/agent/v1', remoteAgentRoutes);
 app.use('/agent', agentCompatRoutes);
 app.use('/system/health', tenantMiddleware, systemHealthRoutes);
 app.use('/billing', tenantMiddleware, billingRoutes);
+
+app.use('/api/bolepix', bolepixRoutes);
+app.use('/bolepix-ads', tenantMiddleware, bolepixAdRoutes);
 app.use('/customer-app', tenantMiddleware, customerAppRoutes);
 app.use('/billing-admin', tenantMiddleware, billingAdminRoutes);
 app.use('/operations', tenantMiddleware, operationsReadRoutes);

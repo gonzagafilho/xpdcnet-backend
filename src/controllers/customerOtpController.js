@@ -14,7 +14,15 @@ exports.requestOtp = async (req, res, next) => {
 
 exports.verifyOtp = async (req, res, next) => {
   try {
-    res.json(await customerOtpService.verifyOtp(tenantId(req), req.body || {}));
+    res.json(await customerOtpService.verifyOtp(tenantId(req), req.body || {}, { userAgent: req.headers['user-agent'] || '' }));
+  } catch (err) {
+    next(err);
+  }
+};
+
+exports.trustedDeviceLogin = async (req, res, next) => {
+  try {
+    res.json(await customerOtpService.trustedDeviceLogin(tenantId(req), req.body || {}, { userAgent: req.headers['user-agent'] || '' }));
   } catch (err) {
     next(err);
   }

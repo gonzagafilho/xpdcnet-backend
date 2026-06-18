@@ -5,6 +5,7 @@ const remoteAgentController = require('../controllers/remoteAgentController');
 router.use(agentNodeAuthMiddleware);
 
 router.post('/heartbeat', remoteAgentController.heartbeat);
+router.post('/pppoe/snapshots', remoteAgentController.receivePppoeSnapshots);
 router.get('/commands/next', remoteAgentController.nextCommand);
 router.post('/commands/:id/complete', remoteAgentController.completeCommand);
 

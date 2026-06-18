@@ -165,7 +165,7 @@ exports.enqueueServerMonitoringCommand = async (params) => {
     payload,
   });
 
-  return { command: command.toObject() };
+  return { command: sanitizeRemoteAgentCommand(command.toObject()) };
 };
 
 /**
@@ -221,6 +221,16 @@ exports.completeCommandForNode = async (nodeId, commandId, body) => {
   const resultError = body.error != null ? String(body.error).slice(0, 2000) : '';
   const resultData = body.resultData ?? body.data ?? body.result ?? null;
 
+  const existingCommand = await RemoteAgentCommand.findOne({
+    _id: commandId,
+    networkNodeId: nodeId,
+    status: 'processing',
+  })
+    .select('kind')
+    .lean();
+
+  const safeResultData = sanitizeRemoteAgentResultData(existingCommand?.kind, resultData);
+
   const updated = await RemoteAgentCommand.findOneAndUpdate(
     {
       _id: commandId,
@@ -234,7 +244,7 @@ exports.completeCommandForNode = async (nodeId, commandId, body) => {
         resultAction,
         resultMessage,
         resultError: success ? '' : resultError,
-        resultData,
+        resultData: safeResultData,
         completedAt: new Date(),
       },
     },
@@ -242,6 +252,8 @@ exports.completeCommandForNode = async (nodeId, commandId, body) => {
   ).lean();
 
   if (!updated) return { error: 'not_found_or_not_processing' };
+
+  await updateNetworkConcentratorFromTestCommand(updated, body, safeResultData);
 
   if (
     success &&
@@ -252,8 +264,8 @@ exports.completeCommandForNode = async (nodeId, commandId, body) => {
         tenantId: updated.tenantId,
         networkNodeId: updated.networkNodeId,
         commandId: updated._id,
-        interfaces: Array.isArray(resultData)
-          ? resultData
+        interfaces: Array.isArray(safeResultData)
+          ? safeResultData
           : [],
       });
 
@@ -332,7 +344,7 @@ try {
     updated.kind === 'READ_PPP_ACTIVE'
   )
 ) {
-  const rawData = updated.resultData || resultData || null;
+  const rawData = updated.resultData || safeResultData || null;
 
   const unwrap = (value) => {
     if (!value) return null;
@@ -523,7 +535,7 @@ try {
   );
 }
 
-return { command: updated };
+return { command: sanitizeRemoteAgentCommand(updated) };
 };
 
 /**
@@ -626,7 +638,7 @@ exports.enqueueGenericCommand = async (params) => {
     payload: payload || {},
   });
 
-  return { command: command.toObject() };
+  return { command: sanitizeRemoteAgentCommand(command.toObject()) };
 };
 
 /**
@@ -639,5 +651,6 @@ exports.listCommandsForNode = async (tenantId, networkNodeId, limit = 50) => {
   })
     .sort({ createdAt: -1 })
     .limit(Math.min(200, Math.max(1, Number(limit || 50))))
-    .lean();
+    .lean()
+    .then((rows) => rows.map(sanitizeRemoteAgentCommand));
 };
