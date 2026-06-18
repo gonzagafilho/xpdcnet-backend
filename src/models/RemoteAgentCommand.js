@@ -29,6 +29,7 @@ const RemoteAgentCommandSchema = new mongoose.Schema(
         'READ_NEIGHBORS',
         'READ_WIREGUARD_PEERS',
         'READ_INTERFACE_DISCOVERY',
+        'NETWORK_CONCENTRATOR_TEST',
       ],
       default: 'SYNC_INTENT',
     },
@@ -46,6 +47,7 @@ const RemoteAgentCommandSchema = new mongoose.Schema(
     resultAction: { type: String, default: null },
     resultMessage: { type: String, default: '' },
     resultError: { type: String, default: '' },
+      // Conteúdo sanitizado por kind em remoteAgentResultDataSanitizer antes da persistência.
       resultData: { type: mongoose.Schema.Types.Mixed, default: null },
 
       /**

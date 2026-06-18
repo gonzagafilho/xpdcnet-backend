@@ -1,10 +1,78 @@
 const mongoose = require('mongoose');
 const RemoteAgentCommand = require('../models/RemoteAgentCommand');
+const NetworkConcentrator = require('../models/NetworkConcentrator');
 const { emitRealtime } = require('../realtime/socketServer');
 const { persistInterfaceDiscovery } = require('./networkInterfaceInventoryService');
 const { correlateTopologyFromInterfaces } = require('./networkTopologyCorrelationService');
 const { updateTopologyHealthFromInterfaces } = require('./networkTopologyHealthService');
 const { saveTelemetrySnapshot } = require('./mikrotikTelemetryService');
+const { sanitizeRemoteAgentResultData } = require('./remoteAgentResultDataSanitizer');
+
+function scrubSafeText(value, max = 500) {
+  return String(value || '')
+    .replace(/password\s*[:=]\s*\S+/gi, 'password=[redacted]')
+    .replace(/senha\s*[:=]\s*\S+/gi, 'senha=[redacted]')
+    .replace(/secret\s*[:=]\s*\S+/gi, 'secret=[redacted]')
+    .slice(0, max);
+}
+
+function redactRemoteAgentPayload(value) {
+  if (!value || typeof value !== 'object') return value;
+  if (Array.isArray(value)) return value.map(redactRemoteAgentPayload);
+  return Object.entries(value).reduce((acc, [key, item]) => {
+    if (/password|senha|secret|token|credential/i.test(String(key))) {
+      acc[key] = '[redacted]';
+      return acc;
+    }
+    acc[key] = item && typeof item === 'object' ? redactRemoteAgentPayload(item) : item;
+    return acc;
+  }, {});
+}
+
+function sanitizeRemoteAgentCommand(command) {
+  if (!command || typeof command !== 'object') return command;
+  return {
+    ...command,
+    payload: redactRemoteAgentPayload(command.payload),
+  };
+}
+
+function normalizeConcentratorStatus(body, resultData, success) {
+  const explicit = resultData && typeof resultData === 'object' ? String(resultData.status || '').trim() : '';
+  if (['online', 'offline', 'auth_error', 'timeout', 'unsupported', 'unknown'].includes(explicit)) return explicit;
+  if (success) return 'online';
+  const text = [body?.error, body?.message, resultData?.error, resultData?.message].filter(Boolean).join(' ').toLowerCase();
+  if (/auth|login|senha|password|forbidden|unauthorized|not allowed/.test(text)) return 'auth_error';
+  if (/timeout|timed out|etimedout|econnreset|econnrefused|unreachable/.test(text)) return 'timeout';
+  return 'offline';
+}
+
+async function updateNetworkConcentratorFromTestCommand(command, body, resultData) {
+  if (!command || command.kind !== 'NETWORK_CONCENTRATOR_TEST') return;
+  const concentratorId = command.payload && command.payload.concentratorId;
+  if (!concentratorId || !mongoose.Types.ObjectId.isValid(String(concentratorId))) return;
+
+  const success = body && body.success !== false;
+  const status = normalizeConcentratorStatus(body, resultData, success);
+  const safeError = status === 'online'
+    ? ''
+    : scrubSafeText(body?.error || resultData?.error || body?.message || resultData?.message || 'Teste de concentrador falhou.');
+
+  await NetworkConcentrator.updateOne(
+    {
+      _id: concentratorId,
+      tenantId: command.tenantId,
+      agentNodeId: command.networkNodeId,
+    },
+    {
+      $set: {
+        status,
+        lastTestAt: command.completedAt || new Date(),
+        lastErrorSafe: safeError,
+      },
+    },
+  );
+}
 
 /**
  * @param {object} params
@@ -46,7 +114,7 @@ exports.enqueueSyncIntentCommand = async (params) => {
     payload,
   });
 
-  return { command: command.toObject(), duplicate: false };
+  return { command: sanitizeRemoteAgentCommand(command.toObject()), duplicate: false };
 };
 
 /**
@@ -70,7 +138,7 @@ exports.enqueueMonitoringInspectCommand = async (params) => {
     payload,
   });
 
-  return { command: command.toObject() };
+  return { command: sanitizeRemoteAgentCommand(command.toObject()) };
 };
 
 /**
