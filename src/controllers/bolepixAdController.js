@@ -1,7 +1,10 @@
 const bolepixAdService = require('../services/bolepixAdService');
 
 function publicBaseUrl(req) {
-  const configured = String(process.env.PUBLIC_API_URL || '').trim().replace(/\/$/, '');
+  const configured = String(process.env.PUBLIC_API_URL || process.env.APP_PUBLIC_URL || '')
+    .trim()
+    .replace(new RegExp('/+$'), '')
+    .replace(new RegExp('/api$', 'i'), '');
   if (configured) return configured;
   const forwardedProto = String(req.get('x-forwarded-proto') || '').split(',')[0].trim();
   const protocol = forwardedProto || req.protocol;
