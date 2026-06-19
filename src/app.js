@@ -32,12 +32,14 @@ const requireMikrotikCryptoConfigured = require('./middlewares/requireMikrotikCr
 const bolepixRoutes = require('./routes/billing/bolepixRoutes');
 const bolepixAdRoutes = require('./routes/bolepixAdRoutes');
 const partnerAdRoutes = require('./routes/partnerAdRoutes');
+const dataImportRoutes = require('./routes/dataImportRoutes');
 
 const app = express();
 
 app.use(cors());
 app.use('/bolepix-ads', express.json({ limit: '7mb' }));
 app.use('/bolepix-partners', express.json({ limit: '7mb' }));
+app.use('/api/admin/data-import', express.json({ limit: '12mb' }));
 app.use(express.json());
 app.use('/uploads', express.static(path.resolve(__dirname, '../uploads'), { maxAge: '7d', immutable: true }));
 
@@ -78,6 +80,7 @@ app.use('/billing-admin', tenantMiddleware, billingAdminRoutes);
 app.use('/operations', tenantMiddleware, operationsReadRoutes);
 app.use('/monitoring', tenantMiddleware, monitoringBoardRoutes);
 app.use('/topology', tenantMiddleware, networkTopologyRoutes);
+app.use('/api/admin/data-import', tenantMiddleware, dataImportRoutes);
 
 // error handler por último
 app.use(errorHandler);
