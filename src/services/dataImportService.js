@@ -1,12 +1,15 @@
 const mongoose = require('mongoose');
 const ApiError = require('../errors/ApiError');
 const Client = require('../models/Client');
+const ClientAccess = require('../models/ClientAccess');
 const Plan = require('../models/Plan');
 const MikrotikServer = require('../models/MikrotikServer');
 const NetworkNode = require('../models/NetworkNode');
 const PppoeLiveSnapshot = require('../models/PppoeLiveSnapshot');
 const DataImportJob = require('../models/DataImportJob');
 const parser = require('./dataImportParserService');
+const { groupCustomerAccessPreview } = require('./dataImportCustomerGroupingService');
+const { safePreviewCustomers, confirmGroupedImport } = require('./dataImportMultiAccessService');
 
 const TEMPLATE_COLUMNS = [
   'nome', 'cpf_cnpj', 'whatsapp', 'telefone', 'email', 'cep', 'endereco', 'numero',
@@ -37,11 +40,16 @@ function publicJob(job) {
     previewRows: row.previewRows || [],
     report: {
       totalRows: row.totalRows || 0,
+      totalAccessRows: row.totalAccessRows || row.totalRows || 0,
+      multiAccessCustomers: row.multiAccessCustomers || 0,
+      criticalDuplicateRows: row.criticalDuplicateRows || row.duplicateRows || 0,
       validRows: row.validRows || 0,
       duplicateRows: row.duplicateRows || 0,
       invalidRows: row.invalidRows || 0,
       matchedPppoeRows: row.matchedPppoeRows || 0,
+      unmatchedPppoeRows: row.unmatchedPppoeRows || 0,
       importedRows: row.importedRows || 0,
+      importedAccessRows: row.importedAccessRows || 0,
       skippedRows: row.skippedRows || 0,
       errors: row.errorItems || [],
     },
@@ -67,9 +75,10 @@ function planKey(value) {
 
 async function validationContext(tenantId, rows) {
   const usernames = [...new Set(rows.map((row) => row.pppoeUsername).filter(Boolean))];
-  const [plans, existingClients, livePppoe] = await Promise.all([
+  const [plans, existingClients, existingAccesses, livePppoe] = await Promise.all([
     Plan.find({ tenantId, isActive: true }).select('_id name price authType mikrotik').lean(),
     Client.find({ tenantId }).select('document access.username').lean(),
+    ClientAccess.find({ tenantId }).select('username').lean(),
     usernames.length
       ? PppoeLiveSnapshot.find({ tenantId: String(tenantId), pppoeUsername: { $in: usernames } })
         .select('pppoeUsername').lean()
@@ -79,7 +88,10 @@ async function validationContext(tenantId, rows) {
     planByName: new Map(plans.map((plan) => [planKey(plan.name), plan])),
     existingDocuments: new Set(existingClients.map((client) => String(client.document || '').replace(/\D/g, '')).filter(Boolean)),
     existingUsernames: new Set(
-      existingClients.map((client) => String(client.access?.username || '').toLowerCase()).filter(Boolean),
+      [
+        ...existingClients.map((client) => String(client.access?.username || '').toLowerCase()),
+        ...existingAccesses.map((access) => String(access.username || '').toLowerCase()),
+      ].filter(Boolean),
     ),
     livePppoe: new Set(livePppoe.map((row) => String(row.pppoeUsername || '').toLowerCase())),
   };
@@ -194,7 +206,8 @@ exports.previewCustomers = async (payload, authContext) => {
     targetServer(tenantId, payload.targetServerId),
     validationContext(tenantId, rows),
   ]);
-  const validation = validateRows(rows, context);
+  const grouped = groupCustomerAccessPreview(rows, context);
+  const multiAccessCustomers = grouped.customers.filter((customer) => customer.accessCount > 1).length;
   const values = {
     tenantId,
     type: 'customers',
@@ -208,10 +221,21 @@ exports.previewCustomers = async (payload, authContext) => {
     targetNetworkNodeName: node?.name || '',
     detectedColumns: parsed.headers,
     columnMapping: mapping,
-    previewRows: validation.previewRows,
-    normalizedRows: validation.normalizedRows,
-    ...validation.report,
-    errorItems: validation.errors,
+    previewRows: safePreviewCustomers(grouped),
+    normalizedRows: rows,
+    totalRows: grouped.report.totalRows,
+    totalAccessRows: grouped.report.totalAccessRows,
+    multiAccessCustomers,
+    criticalDuplicateRows: grouped.report.duplicateRows,
+    validRows: grouped.report.validRows,
+    duplicateRows: grouped.report.duplicateRows,
+    invalidRows: grouped.report.invalidRows,
+    matchedPppoeRows: grouped.report.matchedPppoeRows,
+    unmatchedPppoeRows: grouped.report.unmatchedPppoeRows,
+    importedRows: 0,
+    importedAccessRows: 0,
+    skippedRows: grouped.report.skippedRows,
+    errorItems: grouped.report.errors,
     createdBy: String(authContext.userId || ''),
     completedAt: null,
   };
@@ -236,60 +260,22 @@ exports.confirmCustomers = async (jobId, authContext) => {
   const { server, node } = await targetServer(tenantId, job.targetServerId);
   const sourceRows = Array.isArray(job.normalizedRows) ? job.normalizedRows : [];
   const context = await validationContext(tenantId, sourceRows);
-  const revalidated = validateRows(sourceRows, context);
-  let importedRows = 0;
-  let skippedRows = revalidated.report.duplicateRows + revalidated.report.invalidRows;
-  const errors = [...revalidated.errors];
+  const result = await confirmGroupedImport({ tenantId, server, node, job, sourceRows, context });
 
-  for (const row of revalidated.normalizedRows.filter((item) => item.validationStatus === 'valid')) {
-    try {
-      await Client.create({
-        tenantId,
-        networkNodeId: node?._id || null,
-        fullName: row.fullName,
-        document: row.document,
-        phone: row.whatsapp || row.phone || '',
-        email: row.email || '',
-        address: {
-          zip: row.zip || '', street: row.street || '', number: row.number || '',
-          neighborhood: row.neighborhood || '', city: row.city || '', state: row.state || '',
-        },
-        planId: row.planId,
-        monthlyPrice: row.monthlyPrice,
-        dueDay: 10,
-        contract: { notes: row.contract ? `Contrato de origem: ${row.contract}` : '' },
-        access: { authType: row.planAuthType || 'pppoe', username: row.pppoeUsername, password: row.pppoePassword },
-        mikrotik: {
-          enabled: false,
-          serverId: server._id,
-          profile: row.planProfile || '',
-          comment: 'Importado pela Central de Migração; sincronização não executada.',
-          sync: { state: 'never' },
-        },
-        status: 'pending',
-        notes: `Importado do arquivo ${job.originalFilename}.`,
-      });
-      importedRows += 1;
-    } catch (error) {
-      skippedRows += 1;
-      errors.push({
-        row: row.rowNumber,
-        field: error?.code === 11000 ? 'pppoeUsername' : '',
-        code: error?.code === 11000 ? 'DUPLICATE_DURING_CONFIRM' : 'IMPORT_ERROR',
-        message: error?.code === 11000
-          ? 'Registro tornou-se duplicado antes da confirmação.'
-          : 'Não foi possível gravar este registro.',
-      });
-    }
-  }
   job.status = 'completed';
-  job.importedRows = importedRows;
-  job.skippedRows = skippedRows;
-  job.duplicateRows = revalidated.report.duplicateRows;
-  job.invalidRows = revalidated.report.invalidRows;
-  job.validRows = revalidated.report.validRows;
-  job.matchedPppoeRows = revalidated.report.matchedPppoeRows;
-  job.errorItems = errors.slice(0, 250);
+  job.totalRows = result.grouped.report.totalRows;
+  job.totalAccessRows = result.grouped.report.totalAccessRows;
+  job.multiAccessCustomers = result.grouped.customers.filter((customer) => customer.accessCount > 1).length;
+  job.criticalDuplicateRows = result.grouped.report.duplicateRows;
+  job.importedRows = result.importedRows;
+  job.importedAccessRows = result.importedAccessRows;
+  job.skippedRows = result.skippedRows;
+  job.duplicateRows = result.grouped.report.duplicateRows;
+  job.invalidRows = result.grouped.report.invalidRows;
+  job.validRows = result.grouped.report.validRows;
+  job.matchedPppoeRows = result.grouped.report.matchedPppoeRows;
+  job.unmatchedPppoeRows = result.grouped.report.unmatchedPppoeRows;
+  job.errorItems = result.errors.slice(0, 250);
   job.completedAt = new Date();
   await job.save();
   return publicJob(job);
@@ -305,4 +291,4 @@ exports.listJobs = async (tenantIdValue, query = {}) => {
 };
 
 exports.csvTemplate = () => `\uFEFF${TEMPLATE_COLUMNS.join(',')}\r\n`;
-exports._test = { validateRows, TEMPLATE_COLUMNS };
+exports._test = { validateRows, validationContext, TEMPLATE_COLUMNS };

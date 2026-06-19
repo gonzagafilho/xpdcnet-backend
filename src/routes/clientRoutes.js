@@ -8,6 +8,7 @@ router.use(isAdmin);
 
 router.post('/', clientController.create);
 router.get('/', clientController.list);
+router.get('/:id/accesses', clientController.listAccesses);
 router.get('/:id/network-intent', clientController.getNetworkIntent);
 router.get('/:id', clientController.getById);
 router.put('/:id', clientController.update);

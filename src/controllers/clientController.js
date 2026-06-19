@@ -1,4 +1,5 @@
 const clientService = require('../services/clientService');
+const clientAccessService = require('../services/clientAccessService');
 
 exports.create = async (req, res, next) => {
   try {
@@ -25,6 +26,15 @@ exports.getById = async (req, res, next) => {
     const tenantId = req.tenant._id.toString();
     const client = await clientService.getById(tenantId, req.params.id);
     res.json(client);
+  } catch (err) {
+    next(err);
+  }
+};
+
+exports.listAccesses = async (req, res, next) => {
+  try {
+    const tenantId = req.tenant._id.toString();
+    res.json({ items: await clientAccessService.listByClient(tenantId, req.params.id) });
   } catch (err) {
     next(err);
   }
