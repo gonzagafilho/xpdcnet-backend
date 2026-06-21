@@ -20,6 +20,15 @@ exports.list = async (req, res, next) => {
   }
 };
 
+exports.listOptions = async (req, res, next) => {
+  try {
+    const tenantId = req.tenant._id.toString();
+    res.json(await planService.listOptions(tenantId));
+  } catch (err) {
+    next(err);
+  }
+};
+
 exports.getById = async (req, res, next) => {
   try {
     const tenantId = req.tenant._id.toString();
@@ -34,6 +43,16 @@ exports.update = async (req, res, next) => {
   try {
     const tenantId = req.tenant._id.toString();
     const plan = await planService.update(tenantId, req.params.id, req.body);
+    res.json(plan);
+  } catch (err) {
+    next(err);
+  }
+};
+
+exports.updateStatus = async (req, res, next) => {
+  try {
+    const tenantId = req.tenant._id.toString();
+    const plan = await planService.updateStatus(tenantId, req.params.id, req.body?.status);
     res.json(plan);
   } catch (err) {
     next(err);

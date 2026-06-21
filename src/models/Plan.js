@@ -6,10 +6,22 @@ const PlanSchema = new mongoose.Schema(
 
     name: { type: String, required: true },          // "300 Mbps"
     speedMbps: { type: Number, required: true },     // 300
+    uploadMbps: { type: Number, default: null },
     price: { type: Number, required: true },         // 78.99
     billingCycle: { type: String, enum: ['monthly', 'weekly', 'daily'], default: 'monthly' },
 
     authType: { type: String, enum: ['pppoe', 'hotspot'], default: 'pppoe' },
+
+    networkNodeId: { type: mongoose.Schema.Types.ObjectId, ref: 'NetworkNode', default: null, index: true },
+    serverId: { type: mongoose.Schema.Types.ObjectId, ref: 'MikrotikServer', default: null, index: true },
+    concentratorId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'NetworkConcentrator',
+      default: null,
+      index: true,
+    },
+    popName: { type: String, default: '', trim: true },
+    description: { type: String, default: '', trim: true },
 
     // Base para integração Mikrotik (vamos evoluir no módulo Mikrotik)
     mikrotik: {
