@@ -1,4 +1,6 @@
+const mongoose = require('mongoose');
 const Client = require('../models/Client');
+const NetworkConcentrator = require('../models/NetworkConcentrator');
 const networkNodeService = require('../services/networkNodeService');
 const remoteAgentCommandService = require('../services/remoteAgentCommandService');
 const { syncAgentPppoeSnapshots } = require('../services/pppoeSnapshotService');
@@ -52,6 +54,31 @@ function resolveAgentTenantId(node) {
     if (fallback) return fallback;
   }
   return '';
+}
+
+async function resolveAgentConcentrator(node, body = {}) {
+  const tenantId = resolveAgentTenantId(node);
+  const explicitId = body.concentratorId != null ? String(body.concentratorId).trim() : '';
+  const filter = {
+    tenantId,
+    agentNodeId: node._id,
+    enabled: true,
+    type: 'mikrotik',
+    protocol: 'routeros',
+  };
+
+  if (explicitId) {
+    if (!mongoose.Types.ObjectId.isValid(explicitId)) {
+      return { error: 'invalid_concentrator_id' };
+    }
+    const concentrator = await NetworkConcentrator.findOne({ ...filter, _id: explicitId }).lean();
+    return concentrator ? { concentrator } : { error: 'concentrator_not_found' };
+  }
+
+  const candidates = await NetworkConcentrator.find(filter).sort({ name: 1 }).limit(2).lean();
+  if (candidates.length === 1) return { concentrator: candidates[0] };
+  if (candidates.length === 0) return { error: 'concentrator_not_found' };
+  return { error: 'concentrator_id_required' };
 }
 
 function normalizeAgentPppoeSnapshotPayload(body = {}) {
@@ -165,8 +192,15 @@ exports.receivePppoeSnapshots = async (req, res, next) => {
       return;
     }
 
+    const resolved = await resolveAgentConcentrator(node, body);
+    if (resolved.error) {
+      const status = resolved.error === 'concentrator_id_required' ? 409 : 400;
+      res.status(status).json({ error: resolved.error });
+      return;
+    }
+
     const sessions = normalizeAgentPppoeSnapshotPayload(body);
-    const result = await syncAgentPppoeSnapshots(sessions, tenantId);
+    const result = await syncAgentPppoeSnapshots(sessions, resolved.concentrator);
     await networkNodeService.touchAgentHeartbeat(node._id, {
       pppoeSnapshotAt: result.syncedAt,
       pppoeOnline: result.online,
@@ -179,6 +213,8 @@ exports.receivePppoeSnapshots = async (req, res, next) => {
       offlineMarked: result.offlineMarked,
       totalRead: result.totalRead,
       syncedAt: result.syncedAt,
+      concentratorId: result.concentratorId,
+      concentratorName: result.concentratorName,
     });
   } catch (err) {
     next(err);

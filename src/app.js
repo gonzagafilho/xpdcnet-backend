@@ -60,6 +60,7 @@ app.use('/system/setup', databaseReady, systemSetupRoutes);
 
 // Rotas operacionais: tenant resolvido no servidor (x-tenant opcional; ver DEFAULT_TENANT_SLUG)
 app.use('/plans', tenantMiddleware, planRoutes);
+app.use('/api/admin/plans', tenantMiddleware, planRoutes);
 app.use('/clients', tenantMiddleware, clientRoutes);
 app.use('/invoices', tenantMiddleware, invoiceRoutes);
 app.use('/mikrotik/servers', tenantMiddleware, requireMikrotikCryptoConfigured, mikrotikServerRoutes);

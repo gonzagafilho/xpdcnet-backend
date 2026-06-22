@@ -15,7 +15,6 @@ require('dotenv').config();
 
 const { withMikrotikConnection } = require('../integrations/mikrotik/mikrotikClient');
 const executor = require('../integrations/mikrotik/mikrotikExecutor');
-const { getActivePppoeSessions } = require('../services/mikrotikRouterosService');
 
 const LOG = '[xpdcnet-remote-agent]';
 
@@ -23,8 +22,6 @@ const BASE = String(process.env.XPDCNET_AGENT_CENTRAL_BASE || '').replace(/\/$/,
 const NODE_ID = String(process.env.XPDCNET_AGENT_NODE_ID || '').trim();
 const TOKEN = String(process.env.XPDCNET_AGENT_TOKEN || '').trim();
 const POLL_MS = Math.max(2_000, Number(process.env.XPDCNET_AGENT_POLL_MS) || 5000);
-const PPPOE_SNAPSHOT_MS = Math.max(5_000, Number(process.env.XPDCNET_AGENT_PPPOE_SNAPSHOT_MS) || 10_000);
-const PPPOE_SNAPSHOT_ENABLED = String(process.env.XPDCNET_AGENT_PPPOE_SNAPSHOT_ENABLED || '').toLowerCase() !== 'false' && Boolean(String(process.env.MIKROTIK_HOST || '').trim());
 const ROUTER_TIMEOUT_MS = Math.min(
   120_000,
   Math.max(5_000, Number(process.env.AGENT_ROUTEROS_TIMEOUT_MS) || 25_000),
@@ -298,26 +295,6 @@ async function executeSyncIntentPayload(payload) {
   }
 }
 
-async function sendPppoeSnapshots() {
-  if (!PPPOE_SNAPSHOT_ENABLED) return;
-  const sessions = await getActivePppoeSessions();
-  const safeSessions = sessions.map((session) => ({
-    username: session.username,
-    currentIp: session.currentIp,
-    uptime: session.uptime,
-    service: session.service,
-    callerId: session.callerId,
-    downloadBytes: session.downloadBytes,
-    uploadBytes: session.uploadBytes,
-  }));
-  const { status, data } = await httpJson('POST', '/agent/v1/pppoe/snapshots', { sessions: safeSessions });
-  if (status >= 300) {
-    console.warn(`${LOG} pppoe/snapshots HTTP %s %s`, status, typeof data === 'string' ? data : JSON.stringify(data));
-    return;
-  }
-  console.log(`${LOG} pppoe snapshot enviado online=%s offlineMarked=%s`, data?.online ?? 0, data?.offlineMarked ?? 0);
-}
-
 async function heartbeat() {
   const hostname = require('os').hostname();
   const { status, data } = await httpJson('POST', '/agent/v1/heartbeat', {
@@ -391,20 +368,10 @@ async function main() {
   process.once('SIGINT', stop);
   process.once('SIGTERM', stop);
 
-  let lastPppoeSnapshotAt = 0;
 
   while (running) {
     try {
       await heartbeat();
-      if (PPPOE_SNAPSHOT_ENABLED && Date.now() - lastPppoeSnapshotAt >= PPPOE_SNAPSHOT_MS) {
-        try {
-          await sendPppoeSnapshots();
-          lastPppoeSnapshotAt = Date.now();
-        } catch (snapshotErr) {
-          lastPppoeSnapshotAt = Date.now();
-          console.error(`${LOG} erro snapshot PPPoE: %s`, snapshotErr && snapshotErr.message ? snapshotErr.message : snapshotErr);
-        }
-      }
       const { status, data } = await httpJson('GET', '/agent/v1/commands/next', undefined);
       if (status === 204 || !data || !data._id) {
         await sleep(POLL_MS);

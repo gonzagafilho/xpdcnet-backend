@@ -1,3 +1,5 @@
+const { collectRouterosReadOnlyTelemetry } = require('../../services/routerosReadOnlyTelemetryService');
+
 /**
  * Comandos técnicos PPPoE em /ppp/secret (RouterOS).
  * Recebe uma instância já ligada (RouterOSAPI). Sem decisão de negócio.
@@ -164,32 +166,16 @@ async function fetchPppActiveSessionCount(api) {
  * @param {import('node-routeros').RouterOSAPI} api
  */
 async function fetchOperationalSnapshot(api) {
+  const telemetry = await collectRouterosReadOnlyTelemetry(api);
   const identity = await printFirstRow(api, '/system/identity');
-  const resource = await printFirstRow(api, '/system/resource');
+  const resource = telemetry.resource;
   let routerboard = null;
   try {
     routerboard = await printFirstRow(api, '/system/routerboard');
   } catch (_) {
     /* intencional */
   }
-  let interfaces = [];
-  try {
-    const ifrows = await api.write('/interface/print', []);
-    if (Array.isArray(ifrows)) {
-      interfaces = ifrows
-        .filter((r) => rosBoolYes(r.running))
-        .slice(0, 12)
-        .map((r) => ({
-          name: r.name != null ? String(r.name).trim() : '',
-          running: true,
-          disabled: false,
-          rxBytes: r['rx-byte'] != null ? String(r['rx-byte']) : undefined,
-          txBytes: r['tx-byte'] != null ? String(r['tx-byte']) : undefined,
-        }));
-    }
-  } catch (_) {
-    /* intencional */
-  }
+  const interfaces = telemetry.interfaces;
   let pppSecretCount = null;
   try {
     const secrets = await api.write('/ppp/secret/print', []);
@@ -198,7 +184,7 @@ async function fetchOperationalSnapshot(api) {
     /* intencional */
   }
   const pppActiveTotal = await fetchPppActiveSessionCount(api);
-  return { identity, resource, routerboard, interfaces, pppSecretCount, pppActiveTotal };
+  return { identity, resource, routerboard, interfaces, health: telemetry.health, pppSecretCount, pppActiveTotal };
 }
 
 function firstNonEmptyStr(row, keys) {

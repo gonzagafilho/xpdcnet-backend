@@ -121,6 +121,27 @@ module.exports = {
       kill_timeout: 5000,
     },
     {
+      // Preparado para X2.1; permanece desabilitado ate migracao e teste Matriz + Chacara.
+      name: 'xpdcnet-worker-pppoe-live',
+      cwd: ROOT,
+      script: 'src/workers/pppoeLiveSnapshotWorker.js',
+      interpreter: 'node',
+      exec_mode: 'fork',
+      instances: 1,
+      env_file: '.env',
+      env: {
+        NODE_ENV: 'production',
+        PPPOE_LIVE_SYNC_ENABLED: 'false',
+        PPPOE_LIVE_SYNC_INTERVAL_MS: '10000',
+      },
+      autorestart: false,
+      watch: false,
+      time: true,
+      max_restarts: 0,
+      restart_delay: 3000,
+      kill_timeout: 5000,
+    },
+    {
       name: 'xpdcnet-worker-stale',
       cwd: ROOT,
       script: 'src/workers/networkIncidentStaleWorker.js',

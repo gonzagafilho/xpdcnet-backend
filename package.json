@@ -13,7 +13,9 @@
     "migrate:billing-credentials": "node scripts/billing-encrypt-credentials.js",
     "migrate:billing-rotate-credentials": "node scripts/billing-rotate-credentials.js",
     "agent:remote": "node src/agent/remoteAgentOutbound.js",
-    "worker:telemetry-snapshot": "node src/workers/mikrotikTelemetrySnapshotWorker.js"
+    "worker:telemetry-snapshot": "node src/workers/mikrotikTelemetrySnapshotWorker.js",
+    "worker:pppoe-live": "node src/workers/pppoeLiveSnapshotWorker.js",
+    "migrate:pppoe-concentrators": "node src/scripts/migratePppoeSnapshotConcentratorIndex.js"
   },
   "keywords": [],
   "author": "",

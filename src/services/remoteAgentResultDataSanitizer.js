@@ -48,6 +48,8 @@ const ROUTERBOARD_FIELDS = [
   'upgrade-firmware',
   'factory-firmware',
 ];
+
+const HEALTH_FIELDS = ['temperature', 'cpu-temperature', 'voltage'];
 const INTERFACE_FIELDS = [
   '.id',
   'name',
@@ -65,6 +67,8 @@ const INTERFACE_FIELDS = [
   'tx-bytes',
   'rxBytes',
   'txBytes',
+  'rx-bits-per-second',
+  'tx-bits-per-second',
   'rx-packet',
   'tx-packet',
   'link-downs',
@@ -317,6 +321,12 @@ function sanitizeSnapshot(value) {
     safe.routerboard = Array.isArray(value.routerboard)
       ? sanitizeList(value.routerboard, ROUTERBOARD_FIELDS, 1)
       : pickScalars(value.routerboard, ROUTERBOARD_FIELDS);
+  }
+
+  if (value.health !== undefined) {
+    safe.health = Array.isArray(value.health)
+      ? sanitizeList(value.health, HEALTH_FIELDS, 1)
+      : pickScalars(value.health, HEALTH_FIELDS);
   }
   if (Array.isArray(value.interfaces)) safe.interfaces = sanitizeList(value.interfaces, INTERFACE_FIELDS);
   if (value.pppActive !== undefined) safe.pppActive = sanitizePppContainer(value.pppActive);
