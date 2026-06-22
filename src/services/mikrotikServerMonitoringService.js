@@ -88,6 +88,7 @@ function normalizeSnapshot(raw) {
   const identityObj = Array.isArray(raw?.identity) ? raw.identity[0] : raw?.identity;
   const resourceObj = Array.isArray(raw?.resource) ? raw.resource[0] : raw?.resource;
   const routerboardObj = Array.isArray(raw?.routerboard) ? raw.routerboard[0] : raw?.routerboard;
+  const healthObj = Array.isArray(raw?.health) ? raw.health[0] : raw?.health;
   const { interfaces, pppSecretCount, pppActiveTotal } = raw || {};
 
   const version = pickStr(resourceObj, 'version');
@@ -100,6 +101,10 @@ function normalizeSnapshot(raw) {
   const memTotal = parseBigIntish(resourceObj && (resourceObj['total-memory'] ?? resourceObj.totalMemory));
   const diskFree = parseBigIntish(resourceObj && (resourceObj['free-hdd-space'] ?? resourceObj.freeHddSpace));
   const diskTotal = parseBigIntish(resourceObj && (resourceObj['total-hdd-space'] ?? resourceObj.totalHddSpace));
+  const temperature = parseBigIntish(healthObj && (healthObj.temperature ?? healthObj['cpu-temperature']));
+  const voltage = parseBigIntish(healthObj && healthObj.voltage);
+  const cpuCount = parseBigIntish(resourceObj && (resourceObj['cpu-count'] ?? resourceObj.cpuCount));
+  const architectureName = pickStr(resourceObj, 'architecture-name', 'architectureName');
 
   return {
     identityName,
@@ -112,6 +117,12 @@ function normalizeSnapshot(raw) {
     diskFreeBytes: diskFree,
     diskTotalBytes: diskTotal,
     interfaces: Array.isArray(interfaces) ? interfaces : [],
+    interfaceTotal: Array.isArray(interfaces) ? interfaces.length : 0,
+    interfaceRunning: Array.isArray(interfaces) ? interfaces.filter((item) => item.running && !item.disabled).length : 0,
+    temperature,
+    voltage,
+    cpuCount,
+    architectureName,
     pppSecretCount,
     pppActiveTotal: pppActiveTotal != null && Number.isFinite(Number(pppActiveTotal)) ? Number(pppActiveTotal) : null,
   };
@@ -146,6 +157,50 @@ function trimInterfaceList(list) {
     ...i,
     name: i && i.name != null ? String(i.name).trim() : '',
   }));
+}
+
+function bitsToMbps(value) {
+  const number = Number(value);
+  return Number.isFinite(number) && number >= 0 ? number / 1_000_000 : 0;
+}
+
+async function persistTelemetrySnapshot(tenantId, serverId, base) {
+  const interfaces = Array.isArray(base.interfaces) ? base.interfaces : [];
+  const memoryPercent = base.memoryTotalBytes && base.memoryFreeBytes != null
+    ? Math.max(0, Math.min(100, 100 - ((base.memoryFreeBytes / base.memoryTotalBytes) * 100)))
+    : 0;
+
+  await saveTelemetrySnapshot({
+    tenantId,
+    serverId,
+    serverName: base.name || '',
+    cpuPercent: base.cpuPercent ?? 0,
+    memoryPercent: Number(memoryPercent.toFixed(2)),
+    memoryFreeBytes: base.memoryFreeBytes ?? null,
+    memoryTotalBytes: base.memoryTotalBytes ?? null,
+    temperature: base.temperature ?? null,
+    voltage: base.voltage ?? null,
+    version: base.version || '',
+    uptime: base.uptime || '',
+    boardName: base.board || '',
+    cpuCount: base.cpuCount ?? null,
+    architectureName: base.architectureName || '',
+    interfaceTotal: interfaces.length,
+    interfaceRunning: interfaces.filter((item) => item.running && !item.disabled).length,
+    pppOnline: base.activePppSessionsTotal ?? 0,
+    interfaces: interfaces.map((item) => ({
+      name: item.name || '',
+      rxMbps: bitsToMbps(item.rxBitsPerSecond ?? item.rxRate),
+      txMbps: bitsToMbps(item.txBitsPerSecond ?? item.txRate),
+      running: Boolean(item.running),
+      disabled: Boolean(item.disabled),
+    })),
+    metadata: {
+      monitoringChannel: base.monitoringChannel || '',
+      online: Boolean(base.online),
+      collectedAt: base.lastPolledAt || new Date().toISOString(),
+    },
+  });
 }
 
 /**
@@ -523,10 +578,16 @@ exports.listServersWithMonitoring = async (tenantId, opts = {}) => {
       board: null,
       uptime: null,
       cpuPercent: null,
+      cpuCount: null,
+      architectureName: null,
       memoryTotalBytes: null,
       memoryFreeBytes: null,
       diskTotalBytes: null,
       diskFreeBytes: null,
+      temperature: null,
+      voltage: null,
+      interfaceTotal: 0,
+      interfaceRunning: 0,
       interfaces: [],
       pppSecretCount: null,
       activePppSessionsTotal: null,
@@ -659,6 +720,7 @@ exports.listServersWithMonitoring = async (tenantId, opts = {}) => {
           identity: Array.isArray(raw.identity) ? raw.identity[0] : raw.identity,
           resource: Array.isArray(raw.resource) ? raw.resource[0] : raw.resource,
           routerboard: Array.isArray(raw.routerboard) ? raw.routerboard[0] : raw.routerboard,
+          health: Array.isArray(raw.health) ? raw.health[0] : raw.health,
           interfaces: raw.interfaces,
           pppSecretCount: raw.pppSecretCount,
           pppActiveTotal: raw.pppActiveTotal,
@@ -670,11 +732,17 @@ exports.listServersWithMonitoring = async (tenantId, opts = {}) => {
         base.board = norm.board;
         base.uptime = norm.uptime;
         base.cpuPercent = norm.cpuPercent;
+        base.cpuCount = norm.cpuCount;
+        base.architectureName = norm.architectureName;
         base.memoryTotalBytes = norm.memoryTotalBytes;
         base.memoryFreeBytes = norm.memoryFreeBytes;
         base.diskTotalBytes = norm.diskTotalBytes;
         base.diskFreeBytes = norm.diskFreeBytes;
         base.interfaces = trimInterfaceList(norm.interfaces);
+        base.interfaceTotal = norm.interfaceTotal;
+        base.interfaceRunning = norm.interfaceRunning;
+        base.temperature = norm.temperature;
+        base.voltage = norm.voltage;
         base.pppSecretCount = norm.pppSecretCount;
         base.activePppSessionsTotal = norm.pppActiveTotal != null ? norm.pppActiveTotal : null;
         applyOperationalAlertFields(base);
@@ -693,6 +761,7 @@ exports.listServersWithMonitoring = async (tenantId, opts = {}) => {
         identity: Array.isArray(raw.identity) ? raw.identity[0] : raw.identity,
         resource: Array.isArray(raw.resource) ? raw.resource[0] : raw.resource,
         routerboard: Array.isArray(raw.routerboard) ? raw.routerboard[0] : raw.routerboard,
+          health: Array.isArray(raw.health) ? raw.health[0] : raw.health,
         interfaces: raw.interfaces,
         pppSecretCount: raw.pppSecretCount,
         pppActiveTotal: raw.pppActiveTotal,
@@ -704,11 +773,17 @@ exports.listServersWithMonitoring = async (tenantId, opts = {}) => {
       base.board = norm.board;
       base.uptime = norm.uptime;
       base.cpuPercent = norm.cpuPercent;
+        base.cpuCount = norm.cpuCount;
+        base.architectureName = norm.architectureName;
       base.memoryTotalBytes = norm.memoryTotalBytes;
       base.memoryFreeBytes = norm.memoryFreeBytes;
       base.diskTotalBytes = norm.diskTotalBytes;
       base.diskFreeBytes = norm.diskFreeBytes;
       base.interfaces = trimInterfaceList(norm.interfaces);
+        base.interfaceTotal = norm.interfaceTotal;
+        base.interfaceRunning = norm.interfaceRunning;
+        base.temperature = norm.temperature;
+        base.voltage = norm.voltage;
       base.pppSecretCount = norm.pppSecretCount;
       base.activePppSessionsTotal = norm.pppActiveTotal != null ? norm.pppActiveTotal : null;
       applyOperationalAlertFields(base);
@@ -730,6 +805,9 @@ exports.listServersWithMonitoring = async (tenantId, opts = {}) => {
         if (sid && mongoose.Types.ObjectId.isValid(sid)) {
           try {
             await persistServerSnapshot(tid, new mongoose.Types.ObjectId(sid), b);
+            if (b.online) {
+              await persistTelemetrySnapshot(tid, new mongoose.Types.ObjectId(sid), b);
+            }
           } catch (err) {
             console.error(
               '[mikrotikServerMonitoring] list snapshot persist:',
@@ -923,11 +1001,17 @@ exports.getServerMonitoringDetail = async (tenantId, serverId, opts = {}) => {
       base.board = norm.board;
       base.uptime = norm.uptime;
       base.cpuPercent = norm.cpuPercent;
+        base.cpuCount = norm.cpuCount;
+        base.architectureName = norm.architectureName;
       base.memoryTotalBytes = norm.memoryTotalBytes;
       base.memoryFreeBytes = norm.memoryFreeBytes;
       base.diskTotalBytes = norm.diskTotalBytes;
       base.diskFreeBytes = norm.diskFreeBytes;
       base.interfaces = trimInterfaceList(norm.interfaces);
+        base.interfaceTotal = norm.interfaceTotal;
+        base.interfaceRunning = norm.interfaceRunning;
+        base.temperature = norm.temperature;
+        base.voltage = norm.voltage;
       base.pppSecretCount = norm.pppSecretCount;
       base.activePppSessions = norm.activePppSessions;
       base.activePppSessionsTotal = norm.activePppSessionsTotal;
@@ -952,11 +1036,17 @@ exports.getServerMonitoringDetail = async (tenantId, serverId, opts = {}) => {
     base.board = norm.board;
     base.uptime = norm.uptime;
     base.cpuPercent = norm.cpuPercent;
+        base.cpuCount = norm.cpuCount;
+        base.architectureName = norm.architectureName;
     base.memoryTotalBytes = norm.memoryTotalBytes;
     base.memoryFreeBytes = norm.memoryFreeBytes;
     base.diskTotalBytes = norm.diskTotalBytes;
     base.diskFreeBytes = norm.diskFreeBytes;
       base.interfaces = trimInterfaceList(norm.interfaces);
+        base.interfaceTotal = norm.interfaceTotal;
+        base.interfaceRunning = norm.interfaceRunning;
+        base.temperature = norm.temperature;
+        base.voltage = norm.voltage;
     base.pppSecretCount = norm.pppSecretCount;
     base.activePppSessions = norm.activePppSessions;
     base.activePppSessionsTotal = norm.activePppSessionsTotal;

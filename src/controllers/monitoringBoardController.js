@@ -130,7 +130,12 @@ exports.getQueueHealth = async (req, res, next) => {
         .select('action targetType targetId errorMessage createdAt')
         .lean(),
       getWorkerTelemetry(),
-      MikrotikTelemetrySnapshot.findOne({})
+      MikrotikTelemetrySnapshot.findOne({
+        $or: [
+          { tenantId },
+          { 'metadata.tenantId': String(tenantId) },
+        ],
+      })
         .sort({ createdAt: -1 })
         .lean(),
       MikrotikServerSnapshot.findOne({ tenantId })
@@ -437,6 +442,19 @@ const averageUtilization =
         pppActiveTotal,
         offlineClients,
         connectivityRate,
+        cpuPercent: latestTelemetry?.cpuPercent ?? null,
+        memoryPercent: latestTelemetry?.memoryPercent ?? null,
+        memoryFreeBytes: latestTelemetry?.memoryFreeBytes ?? null,
+        memoryTotalBytes: latestTelemetry?.memoryTotalBytes ?? null,
+        temperature: latestTelemetry?.temperature ?? null,
+        voltage: latestTelemetry?.voltage ?? null,
+        interfaceCount: latestTelemetry?.interfaceTotal ?? (Array.isArray(latestTelemetry?.interfaces) ? latestTelemetry.interfaces.length : null),
+        interfaceRunning: latestTelemetry?.interfaceRunning ?? null,
+        version: latestTelemetry?.version || latestTelemetry?.metadata?.version || null,
+        uptime: latestTelemetry?.uptime || latestTelemetry?.metadata?.uptime || null,
+        boardName: latestTelemetry?.boardName || null,
+        cpuCount: latestTelemetry?.cpuCount ?? null,
+        architectureName: latestTelemetry?.architectureName || null,
        },
         network: {
           totalLinks: realTotalLinks,
@@ -574,7 +592,12 @@ exports.streamQueueHealth = async (req, res, next) => {
             },
           }),
           getWorkerTelemetry(),
-          MikrotikTelemetrySnapshot.findOne({})
+          MikrotikTelemetrySnapshot.findOne({
+        $or: [
+          { tenantId },
+          { 'metadata.tenantId': String(tenantId) },
+        ],
+      })
             .sort({ createdAt: -1 })
             .lean(),
            MikrotikServerSnapshot.findOne({ tenantId })
@@ -638,14 +661,17 @@ exports.streamQueueHealth = async (req, res, next) => {
                 latestServerSnapshot?.pppSecretCount ?? null,
               pppActiveTotal:
                 latestServerSnapshot?.activePppTotal ?? null,
-              cpuPercent: latestTelemetry?.cpuPercent ?? 0,
-            memoryPercent: latestTelemetry?.memoryPercent ?? 0,
-            temperature: latestTelemetry?.temperature ?? 0,
-            interfaceCount: Array.isArray(latestTelemetry?.interfaces)
-              ? latestTelemetry.interfaces.length
-              : 0,
-            version: latestTelemetry?.metadata?.version ?? null,
-            uptime: latestTelemetry?.metadata?.uptime ?? null,
+              cpuPercent: latestTelemetry?.cpuPercent ?? null,
+            memoryPercent: latestTelemetry?.memoryPercent ?? null,
+            memoryFreeBytes: latestTelemetry?.memoryFreeBytes ?? null,
+            memoryTotalBytes: latestTelemetry?.memoryTotalBytes ?? null,
+            temperature: latestTelemetry?.temperature ?? null,
+            voltage: latestTelemetry?.voltage ?? null,
+            interfaceCount: latestTelemetry?.interfaceTotal ?? (Array.isArray(latestTelemetry?.interfaces) ? latestTelemetry.interfaces.length : null),
+            interfaceRunning: latestTelemetry?.interfaceRunning ?? null,
+            version: latestTelemetry?.version || latestTelemetry?.metadata?.version || null,
+            uptime: latestTelemetry?.uptime || latestTelemetry?.metadata?.uptime || null,
+            boardName: latestTelemetry?.boardName || null,
           },
         };
 

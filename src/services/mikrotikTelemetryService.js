@@ -19,12 +19,25 @@ async function saveTelemetrySnapshot(payload = {}) {
   const health = calculateHealth(payload);
 
   return MikrotikTelemetrySnapshot.create({
+    tenantId: payload.tenantId || null,
     serverId: payload.serverId,
     serverName: payload.serverName || '',
-    cpuPercent: payload.cpuPercent || 0,
-    memoryPercent: payload.memoryPercent || 0,
-    temperature: payload.temperature || 0,
-    pppOnline: payload.pppOnline || 0,
+    cpuPercent: payload.cpuPercent ?? 0,
+    memoryPercent: payload.memoryPercent ?? 0,
+    memoryFreeBytes: payload.memoryFreeBytes ?? null,
+    memoryTotalBytes: payload.memoryTotalBytes ?? null,
+    temperature: payload.temperature ?? null,
+    voltage: payload.voltage ?? null,
+    version: payload.version || '',
+    uptime: payload.uptime || '',
+    boardName: payload.boardName || '',
+    cpuCount: payload.cpuCount ?? null,
+    architectureName: payload.architectureName || '',
+    interfaceTotal: payload.interfaceTotal ?? (Array.isArray(payload.interfaces) ? payload.interfaces.length : 0),
+    interfaceRunning: payload.interfaceRunning ?? (Array.isArray(payload.interfaces)
+      ? payload.interfaces.filter((item) => item.running && !item.disabled).length
+      : 0),
+    pppOnline: payload.pppOnline ?? 0,
     interfaces: payload.interfaces || [],
     metadata: payload.metadata || {},
     health,

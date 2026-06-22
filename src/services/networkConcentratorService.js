@@ -4,6 +4,7 @@ const mongoose = require('mongoose');
 const ApiError = require('../errors/ApiError');
 const NetworkConcentrator = require('../models/NetworkConcentrator');
 const NetworkNode = require('../models/NetworkNode');
+const PppoeLiveSnapshot = require('../models/PppoeLiveSnapshot');
 const remoteAgentCommandService = require('./remoteAgentCommandService');
 
 const NETWORK_CONCENTRATOR_TYPES = NetworkConcentrator.NETWORK_CONCENTRATOR_TYPES;
@@ -209,6 +210,14 @@ function sanitizeNetworkConcentrator(item) {
     lastTestAt: row.lastTestAt || null,
     lastErrorSafe: row.lastErrorSafe || '',
     metadata: safeMetadata(row.metadata || {}),
+    snapshotSummary: row.snapshotSummary
+      ? {
+          total: Number(row.snapshotSummary.total || 0),
+          online: Number(row.snapshotSummary.online || 0),
+          offline: Number(row.snapshotSummary.offline || 0),
+          lastSyncAt: row.snapshotSummary.lastSyncAt || null,
+        }
+      : null,
     createdAt: row.createdAt || null,
     updatedAt: row.updatedAt || null,
   };
@@ -231,7 +240,31 @@ async function createNetworkConcentrator(data, authContext) {
 async function listNetworkConcentrators(authContext) {
   const tenantId = getTenantId(authContext);
   const rows = await NetworkConcentrator.find({ tenantId }).sort({ name: 1 }).lean();
-  return rows.map(sanitizeNetworkConcentrator);
+  if (!rows.length) return [];
+
+  const summaries = await PppoeLiveSnapshot.aggregate([
+    {
+      $match: {
+        tenantId: String(tenantId),
+        concentratorId: { $in: rows.map((row) => row._id) },
+      },
+    },
+    {
+      $group: {
+        _id: '$concentratorId',
+        total: { $sum: 1 },
+        online: { $sum: { $cond: [{ $eq: ['$status', 'online'] }, 1, 0] } },
+        offline: { $sum: { $cond: [{ $eq: ['$status', 'offline'] }, 1, 0] } },
+        lastSyncAt: { $max: '$lastUpdateAt' },
+      },
+    },
+  ]);
+  const summaryById = new Map(summaries.map((item) => [String(item._id), item]));
+
+  return rows.map((row) => sanitizeNetworkConcentrator({
+    ...row,
+    snapshotSummary: summaryById.get(String(row._id)) || null,
+  }));
 }
 
 async function updateNetworkConcentrator(id, data, authContext) {

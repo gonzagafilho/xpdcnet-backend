@@ -1,38 +1,37 @@
 const { RouterOSClient } = require('routeros-client');
-
-function envBool(value, fallback = false) {
-  if (value == null || value === '') return fallback;
-  return ['1', 'true', 'yes', 'on'].includes(String(value).trim().toLowerCase());
-}
+const { decryptSecret } = require('./networkConcentratorService');
 
 function envInt(value, fallback) {
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
-function routerosOptionsFromEnv() {
-  const host = String(process.env.MIKROTIK_HOST || '').trim();
-  const user = String(process.env.MIKROTIK_USER || '').trim();
-  const password = String(process.env.MIKROTIK_PASSWORD || '');
-  const port = envInt(process.env.MIKROTIK_PORT, 8728);
-  const timeoutMs = envInt(process.env.MIKROTIK_TIMEOUT_MS, 8000);
-  const tlsEnabled = envBool(process.env.MIKROTIK_TLS, false);
+function timeoutSeconds(value) {
+  return Math.max(1, Math.ceil(envInt(value, envInt(process.env.MIKROTIK_TIMEOUT_MS, 8000)) / 1000));
+}
 
-  if (!host) throw new Error('MIKROTIK_HOST nao configurado.');
-  if (!user) throw new Error('MIKROTIK_USER nao configurado.');
-  if (!password) throw new Error('MIKROTIK_PASSWORD nao configurado.');
-
+function routerosOptionsFromConcentrator(concentrator) {
+  if (!concentrator) throw new Error('Concentrador RouterOS ausente.');
+  const host = String(concentrator.host || '').trim();
+  const user = String(concentrator.username || '').trim();
+  const password = decryptSecret(concentrator.passwordEncrypted);
+  if (!host) throw new Error('Host do concentrador ausente.');
+  if (!user) throw new Error('Usuario do concentrador ausente.');
+  if (!password) throw new Error('Senha do concentrador ausente.');
   return {
     host,
     user,
     password,
-    port,
-    timeout: Math.max(1, Math.ceil(timeoutMs / 1000)),
-    tls: tlsEnabled ? {} : undefined,
+    port: envInt(concentrator.port, concentrator.tls ? 8729 : 8728),
+    timeout: timeoutSeconds(concentrator.metadata?.routerosTimeoutMs || concentrator.metadata?.timeoutMs),
+    tls: concentrator.tls ? {} : undefined,
   };
 }
 
-async function connectRouteros(options = routerosOptionsFromEnv()) {
+async function connectRouteros(options) {
+  if (!options || !options.host || !options.user || !options.password) {
+    throw new Error('Opcoes RouterOS do concentrador ausentes.');
+  }
   const api = new RouterOSClient(options);
   const client = await api.connect();
   return { api, client };
@@ -62,20 +61,34 @@ function normalizePppoeActiveSession(session = {}) {
   };
 }
 
-async function getActivePppoeSessions(connection = null) {
-  const ownedConnection = !connection;
-  const { api, client } = connection || await connectRouteros();
+async function getActivePppoeSessions(connection) {
+  if (!connection?.client) throw new Error('Conexao RouterOS ausente.');
+  const sessions = await connection.client.menu('/ppp/active').get();
+  return (Array.isArray(sessions) ? sessions : []).map(normalizePppoeActiveSession);
+}
 
+async function getPppoeStateFromConcentrator(concentrator) {
+  const connection = await connectRouteros(routerosOptionsFromConcentrator(concentrator));
   try {
-    const sessions = await client.menu('/ppp/active').get();
-    return (Array.isArray(sessions) ? sessions : []).map(normalizePppoeActiveSession);
+    const [activeSessions, secrets] = await Promise.all([
+      getActivePppoeSessions(connection),
+      connection.client.menu('/ppp/secret').get(),
+    ]);
+    return {
+      activeSessions,
+      secretUsernames: (Array.isArray(secrets) ? secrets : [])
+        .map((row) => String(row.name || '').trim().toLowerCase())
+        .filter(Boolean),
+    };
   } finally {
-    if (ownedConnection && api) await api.close();
+    await connection.api.close().catch(() => {});
   }
 }
 
 module.exports = {
   connectRouteros,
   getActivePppoeSessions,
+  getPppoeStateFromConcentrator,
+  routerosOptionsFromConcentrator,
   normalizePppoeActiveSession,
 };
