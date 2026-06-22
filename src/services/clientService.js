@@ -1,11 +1,14 @@
 const mongoose = require('mongoose');
 const ApiError = require('../errors/ApiError');
 const Client = require('../models/Client');
+const ClientAccess = require('../models/ClientAccess');
+const Invoice = require('../models/Invoice');
 const Plan = require('../models/Plan');
 const MikrotikServer = require('../models/MikrotikServer');
 const clientNetworkPolicyService = require('./clientNetworkPolicyService');
 const mikrotikSyncService = require('./mikrotikSyncService');
 const networkNodeService = require('./networkNodeService');
+const clientOperationalService = require('./clientOperationalService');
 const { TRIGGER_REASONS } = require('./mikrotikSyncTriggerCatalog');
 
 /** Converte subdocumento Mongoose ou objeto em plano para merge. */
@@ -33,6 +36,10 @@ function mergeSubdoc(existing, patch) {
 
 function changed(a, b) {
   return JSON.stringify(a) !== JSON.stringify(b);
+}
+
+function escapeRegex(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function buildMikrotikSyncTriggerAfterUpdate(existing, data) {
@@ -333,22 +340,53 @@ exports.list = async (tenantId, query = {}) => {
 
   if (query.status) filter.status = query.status;
   if (query.search) {
+    const pattern = escapeRegex(String(query.search).trim());
+    const accessClientIds = await ClientAccess.distinct('clientId', {
+      tenantId,
+      username: { $regex: pattern, $options: 'i' },
+    });
     filter.$or = [
-      { fullName: { $regex: query.search, $options: 'i' } },
-      { document: { $regex: query.search, $options: 'i' } },
-      { 'access.username': { $regex: query.search, $options: 'i' } },
+      { fullName: { $regex: pattern, $options: 'i' } },
+      { document: { $regex: pattern, $options: 'i' } },
+      { phone: { $regex: pattern, $options: 'i' } },
+      { email: { $regex: pattern, $options: 'i' } },
+      { 'access.username': { $regex: pattern, $options: 'i' } },
+      { _id: { $in: accessClientIds } },
     ];
   }
 
-  return Client.find(filter)
+  const clients = await Client.find(filter)
+    .select("-access.password")
     .sort({ createdAt: -1 })
-    .populate('planId', 'name speedMbps price authType');
+    .populate('planId', 'name speedMbps price authType')
+    .lean();
+  const clientIds = clients.map((client) => client._id);
+  const [accessCounts, invoiceCounts] = await Promise.all([
+    ClientAccess.aggregate([
+      { $match: { tenantId: new mongoose.Types.ObjectId(String(tenantId)), clientId: { $in: clientIds } } },
+      { $group: { _id: "$clientId", count: { $sum: 1 } } },
+    ]),
+    Invoice.aggregate([
+      { $match: { tenantId: new mongoose.Types.ObjectId(String(tenantId)), clientId: { $in: clientIds } } },
+      { $group: { _id: "$clientId", count: { $sum: 1 } } },
+    ]),
+  ]);
+  const accessByClient = new Map(accessCounts.map((row) => [String(row._id), row.count]));
+  const invoiceByClient = new Map(invoiceCounts.map((row) => [String(row._id), row.count]));
+  return clients.map((client) => {
+    const links = {
+      accesses: accessByClient.get(String(client._id)) || 0,
+      contract: clientOperationalService.hasContract(client),
+      invoices: invoiceByClient.get(String(client._id)) || 0,
+    };
+    return { ...client, operationalLinks: links, deletionProtected: links.accesses > 0 || links.contract || links.invoices > 0 };
+  });
 };
 
 exports.getById = async (tenantId, id) => {
   if (!mongoose.Types.ObjectId.isValid(id)) throw ApiError.badRequest('ID inválido');
 
-  const client = await Client.findOne({ _id: id, tenantId }).populate('planId', 'name speedMbps price authType');
+  const client = await Client.findOne({ _id: id, tenantId }).select("-access.password").populate('planId', 'name speedMbps price authType');
   if (!client) throw ApiError.notFound('Cliente não encontrado');
 
   return client;
@@ -365,6 +403,11 @@ exports.update = async (tenantId, id, data) => {
 
   const existing = await Client.findOne({ _id: id, tenantId });
   if (!existing) throw ApiError.notFound('Cliente não encontrado');
+
+  if (data.access && data.access.password === "") {
+    data = { ...data, access: { ...data.access } };
+    delete data.access.password;
+  }
 
   const syncTrigger = buildMikrotikSyncTriggerAfterUpdate(existing, data);
 
@@ -457,6 +500,7 @@ exports.update = async (tenantId, id, data) => {
 };
 
 exports.remove = async (tenantId, id) => {
+  await clientOperationalService.assertCanDelete(tenantId, id);
   if (!mongoose.Types.ObjectId.isValid(id)) throw ApiError.badRequest('ID inválido');
 
   const deleted = await Client.findOneAndDelete({ _id: id, tenantId });

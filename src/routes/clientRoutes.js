@@ -8,7 +8,10 @@ router.use(isAdmin);
 
 router.post('/', clientController.create);
 router.get('/', clientController.list);
+router.get('/summary', clientController.summary);
+router.get('/export.csv', clientController.exportCsv);
 router.get('/:id/accesses', clientController.listAccesses);
+router.get('/:id/operational-details', clientController.operationalDetails);
 router.get('/:id/network-intent', clientController.getNetworkIntent);
 router.get('/:id', clientController.getById);
 router.put('/:id', clientController.update);

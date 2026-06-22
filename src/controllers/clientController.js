@@ -1,5 +1,6 @@
 const clientService = require('../services/clientService');
 const clientAccessService = require('../services/clientAccessService');
+const clientOperationalService = require('../services/clientOperationalService');
 
 exports.create = async (req, res, next) => {
   try {
@@ -16,6 +17,33 @@ exports.list = async (req, res, next) => {
     const tenantId = req.tenant._id.toString();
     const clients = await clientService.list(tenantId, req.query);
     res.json(clients);
+  } catch (err) {
+    next(err);
+  }
+};
+
+exports.summary = async (req, res, next) => {
+  try {
+    res.json(await clientOperationalService.summary(req.tenant._id.toString()));
+  } catch (err) {
+    next(err);
+  }
+};
+
+exports.exportCsv = async (req, res, next) => {
+  try {
+    const result = await clientOperationalService.exportCsv(req.tenant._id.toString(), req.query || {});
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', 'attachment; filename="' + result.filename + '"');
+    res.status(200).send(result.content);
+  } catch (err) {
+    next(err);
+  }
+};
+
+exports.operationalDetails = async (req, res, next) => {
+  try {
+    res.json(await clientOperationalService.details(req.tenant._id.toString(), req.params.id));
   } catch (err) {
     next(err);
   }
