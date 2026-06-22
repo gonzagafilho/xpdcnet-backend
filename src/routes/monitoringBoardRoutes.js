@@ -7,6 +7,11 @@ const monitoringBoardController = require('../controllers/monitoringBoardControl
 router.use(auth);
 router.use(isAdmin);
 
+router.get('/concentrators', monitoringBoardController.getConcentratorsCentral);
+router.get('/concentrators/:id', monitoringBoardController.getConcentratorCentralDetail);
+router.get('/alerts', monitoringBoardController.getConcentratorAlerts);
+router.get('/alerts/open', monitoringBoardController.getOpenConcentratorAlerts);
+router.post('/alerts/:id/resolve', monitoringBoardController.resolveConcentratorAlert);
 router.get('/client/:id', requireMikrotikCryptoConfigured, monitoringBoardController.getClientMonitoring);
 router.get('/session-board', requireMikrotikCryptoConfigured, monitoringBoardController.getSessionBoard);
 router.get('/queue-health', monitoringBoardController.getQueueHealth);

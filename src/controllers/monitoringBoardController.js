@@ -19,6 +19,8 @@ const REMOTE_AGENT_PROCESSING_TIMEOUT_MS = Math.min(
 const ApiError = require('../errors/ApiError');
 const monitoringSessionBoardService = require('../services/monitoringSessionBoardService');
 const monitoringClientPanelService = require('../services/monitoringClientPanelService');
+const monitoringConcentratorService = require('../services/monitoringConcentratorService');
+const concentratorAlertService = require('../services/concentratorAlertService');
 const { getWorkerTelemetry } = require('../services/workerTelemetryService');
 const { saveNocSnapshot, listRecentNocSnapshots } = require('../services/nocSnapshotService');
 const { evaluateNocIncidents, listOpenIncidents, listRecentIncidents } = require('../services/nocIncidentService');
@@ -42,6 +44,57 @@ exports.getSessionBoard = async (req, res, next) => {
     const tenantId = req.tenant._id.toString();
     const payload = await monitoringSessionBoardService.getSessionBoard(tenantId, req.query || {});
     res.json(payload);
+  } catch (err) {
+    next(err);
+  }
+};
+
+/** GET /monitoring/concentrators */
+exports.getConcentratorsCentral = async (req, res, next) => {
+  try {
+    res.json(await monitoringConcentratorService.list(req.tenant._id));
+  } catch (err) {
+    next(err);
+  }
+};
+
+/** GET /monitoring/concentrators/:id */
+exports.getConcentratorCentralDetail = async (req, res, next) => {
+  try {
+    res.json(await monitoringConcentratorService.detail(req.tenant._id, req.params.id));
+  } catch (err) {
+    next(err);
+  }
+};
+
+/** GET /monitoring/alerts */
+exports.getConcentratorAlerts = async (req, res, next) => {
+  try {
+    res.json(await concentratorAlertService.listConcentratorAlerts(req.tenant._id, req.query || {}));
+  } catch (err) {
+    next(err);
+  }
+};
+
+/** GET /monitoring/alerts/open */
+exports.getOpenConcentratorAlerts = async (req, res, next) => {
+  try {
+    res.json(await concentratorAlertService.listConcentratorAlerts(req.tenant._id, {
+      ...(req.query || {}),
+      status: 'open',
+    }));
+  } catch (err) {
+    next(err);
+  }
+};
+
+/** POST /monitoring/alerts/:id/resolve */
+exports.resolveConcentratorAlert = async (req, res, next) => {
+  try {
+    res.json({
+      ok: true,
+      item: await concentratorAlertService.resolveConcentratorAlert(req.tenant._id, req.params.id),
+    });
   } catch (err) {
     next(err);
   }
