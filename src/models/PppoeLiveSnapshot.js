@@ -3,6 +3,19 @@ const mongoose = require('mongoose');
 const PppoeLiveSnapshotSchema = new mongoose.Schema(
   {
     tenantId: { type: String, required: true, index: true },
+    concentratorId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'NetworkConcentrator',
+      required: true,
+      index: true,
+    },
+    concentratorName: { type: String, required: true, trim: true },
+    agentNodeId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'NetworkNode',
+      required: true,
+      index: true,
+    },
     pppoeUsername: { type: String, required: true, trim: true, lowercase: true },
     status: { type: String, enum: ['online', 'offline', 'unknown'], default: 'unknown', index: true },
     currentIp: { type: String, default: null },
@@ -19,10 +32,14 @@ const PppoeLiveSnapshotSchema = new mongoose.Schema(
     source: { type: String, default: 'mikrotik', index: true },
     lastUpdateAt: { type: Date, default: Date.now, index: true },
   },
-  { timestamps: true, versionKey: false },
+  { timestamps: true, versionKey: false, autoIndex: false },
 );
 
-PppoeLiveSnapshotSchema.index({ tenantId: 1, pppoeUsername: 1 }, { unique: true });
+PppoeLiveSnapshotSchema.index(
+  { tenantId: 1, concentratorId: 1, pppoeUsername: 1 },
+  { unique: true },
+);
+PppoeLiveSnapshotSchema.index({ tenantId: 1, agentNodeId: 1, lastUpdateAt: -1 });
 PppoeLiveSnapshotSchema.index({ lastUpdateAt: -1 });
 
 module.exports = mongoose.model('PppoeLiveSnapshot', PppoeLiveSnapshotSchema);

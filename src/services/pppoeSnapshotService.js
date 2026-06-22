@@ -1,5 +1,41 @@
+const mongoose = require('mongoose');
 const PppoeLiveSnapshot = require('../models/PppoeLiveSnapshot');
-const { getActivePppoeSessions } = require('./mikrotikRouterosService');
+const { getPppoeStateFromConcentrator } = require('./mikrotikRouterosService');
+
+async function assertPppoeSnapshotIndexes() {
+  let indexes;
+  try {
+    indexes = await PppoeLiveSnapshot.collection.indexes();
+  } catch (err) {
+    if (err?.codeName === 'NamespaceNotFound') {
+      throw new Error('Colecao PppoeLiveSnapshot ausente; prepare a migracao antes de iniciar o worker.');
+    }
+    throw err;
+  }
+
+  const expected = indexes.find((index) => (
+    index.unique === true
+    && index.key?.tenantId === 1
+    && index.key?.concentratorId === 1
+    && index.key?.pppoeUsername === 1
+    && Object.keys(index.key).length === 3
+  ));
+  if (!expected) {
+    throw new Error('Indice PPPoE multi-concentrador ausente; execute migracao controlada antes do worker.');
+  }
+
+  const legacy = indexes.find((index) => (
+    index.unique === true
+    && index.key?.tenantId === 1
+    && index.key?.pppoeUsername === 1
+    && Object.keys(index.key).length === 2
+  ));
+  if (legacy) {
+    throw new Error(`Indice PPPoE legado ainda ativo (${legacy.name}); remova-o em migracao controlada.`);
+  }
+
+  return true;
+}
 
 function normalizeUsername(value) {
   return String(value || '').trim().toLowerCase();
@@ -15,8 +51,10 @@ function numberValue(value, fallback = 0) {
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
 }
 
-function defaultTenantId() {
-  return String(process.env.PPPOE_DEFAULT_TENANT_ID || 'default').trim() || 'default';
+function objectIdOrNull(value) {
+  return value && mongoose.Types.ObjectId.isValid(String(value))
+    ? new mongoose.Types.ObjectId(String(value))
+    : null;
 }
 
 function calculateMbps(previous, currentBytes, previousKey, sampledAt) {
@@ -27,14 +65,32 @@ function calculateMbps(previous, currentBytes, previousKey, sampledAt) {
   return Number(((deltaBytes * 8) / seconds / 1000000).toFixed(2));
 }
 
-async function upsertPppoeLiveSnapshot(snapshot = {}) {
-  const tenantId = String(snapshot.tenantId || defaultTenantId()).trim();
-  const pppoeUsername = normalizeUsername(snapshot.pppoeUsername || snapshot.username);
+function snapshotContext(value = {}) {
+  const tenantId = String(value.tenantId || '').trim();
+  const concentratorId = objectIdOrNull(value.concentratorId);
+  const concentratorName = trimSafe(value.concentratorName, 160);
+  const agentNodeId = objectIdOrNull(value.agentNodeId);
+
   if (!tenantId) throw new Error('tenantId ausente para snapshot PPPoE.');
+  if (!concentratorId) throw new Error('concentratorId ausente ou invalido para snapshot PPPoE.');
+  if (!concentratorName) throw new Error('concentratorName ausente para snapshot PPPoE.');
+  if (!agentNodeId) throw new Error('agentNodeId ausente ou invalido para snapshot PPPoE.');
+
+  return { tenantId, concentratorId, concentratorName, agentNodeId };
+}
+
+async function upsertPppoeLiveSnapshot(snapshot = {}) {
+  const context = snapshotContext(snapshot);
+  const pppoeUsername = normalizeUsername(snapshot.pppoeUsername || snapshot.username);
   if (!pppoeUsername) throw new Error('pppoeUsername ausente para snapshot PPPoE.');
 
   const lastUpdateAt = snapshot.lastUpdateAt ? new Date(snapshot.lastUpdateAt) : new Date();
-  const previous = await PppoeLiveSnapshot.findOne({ tenantId, pppoeUsername }).lean();
+  const key = {
+    tenantId: context.tenantId,
+    concentratorId: context.concentratorId,
+    pppoeUsername,
+  };
+  const previous = await PppoeLiveSnapshot.findOne(key).lean();
   const downloadBytes = numberValue(snapshot.downloadBytes);
   const uploadBytes = numberValue(snapshot.uploadBytes);
   const downloadMbps = snapshot.downloadMbps != null
@@ -45,9 +101,11 @@ async function upsertPppoeLiveSnapshot(snapshot = {}) {
     : calculateMbps(previous, uploadBytes, 'uploadBytes', lastUpdateAt);
 
   return PppoeLiveSnapshot.findOneAndUpdate(
-    { tenantId, pppoeUsername },
+    key,
     {
       $set: {
+        concentratorName: context.concentratorName,
+        agentNodeId: context.agentNodeId,
         status: snapshot.status || 'online',
         currentIp: trimSafe(snapshot.currentIp, 80),
         uptime: trimSafe(snapshot.uptime, 80),
@@ -63,17 +121,18 @@ async function upsertPppoeLiveSnapshot(snapshot = {}) {
         source: snapshot.source || 'mikrotik',
         lastUpdateAt,
       },
-      $setOnInsert: { tenantId, pppoeUsername },
+      $setOnInsert: key,
     },
-    { upsert: true, new: true, setDefaultsOnInsert: true },
+    { upsert: true, new: true, setDefaultsOnInsert: true, runValidators: true },
   ).lean();
 }
 
-async function markMissingSessionsOffline(activeUsernames = [], tenantId = defaultTenantId()) {
+async function markMissingSessionsOffline(activeUsernames = [], context = {}) {
+  const safeContext = snapshotContext(context);
   const active = activeUsernames.map(normalizeUsername).filter(Boolean);
-  const now = new Date();
   const filter = {
-    tenantId: String(tenantId),
+    tenantId: safeContext.tenantId,
+    concentratorId: safeContext.concentratorId,
     status: 'online',
   };
   if (active.length) filter.pppoeUsername = { $nin: active };
@@ -83,58 +142,26 @@ async function markMissingSessionsOffline(activeUsernames = [], tenantId = defau
       status: 'offline',
       downloadMbps: 0,
       uploadMbps: 0,
-      lastUpdateAt: now,
-      source: 'mikrotik',
+      lastUpdateAt: new Date(),
+      source: context.source || 'mikrotik',
     },
   });
-
   return result.modifiedCount || 0;
 }
 
-async function syncMikrotikPppoeSnapshots(options = {}) {
-  const tenantId = String(options.tenantId || defaultTenantId()).trim();
-  const sessions = await getActivePppoeSessions();
+async function syncSessions(sessions, context, secretUsernames = []) {
+  const safeContext = snapshotContext(context);
   const activeUsernames = [];
   let online = 0;
-
-  for (const session of sessions) {
-    const pppoeUsername = normalizeUsername(session.username);
-    if (!pppoeUsername) continue;
-    activeUsernames.push(pppoeUsername);
-    await upsertPppoeLiveSnapshot({
-      tenantId,
-      pppoeUsername,
-      status: 'online',
-      currentIp: session.currentIp,
-      uptime: session.uptime,
-      downloadBytes: session.downloadBytes,
-      uploadBytes: session.uploadBytes,
-      source: 'mikrotik',
-      lastUpdateAt: new Date(),
-    });
-    online += 1;
-  }
-
-  const offlineMarked = await markMissingSessionsOffline(activeUsernames, tenantId);
-  return {
-    tenantId,
-    online,
-    offlineMarked,
-    totalRead: sessions.length,
-    syncedAt: new Date().toISOString(),
-  };
-}
-
-async function syncAgentPppoeSnapshots(sessions = [], tenantId = defaultTenantId()) {
-  const activeUsernames = [];
-  let online = 0;
+  const sampledAt = new Date();
 
   for (const session of Array.isArray(sessions) ? sessions : []) {
     const pppoeUsername = normalizeUsername(session.username);
     if (!pppoeUsername) continue;
     activeUsernames.push(pppoeUsername);
     await upsertPppoeLiveSnapshot({
-      tenantId,
+      ...safeContext,
+      source: context.source,
       pppoeUsername,
       status: 'online',
       currentIp: session.currentIp,
@@ -143,25 +170,86 @@ async function syncAgentPppoeSnapshots(sessions = [], tenantId = defaultTenantId
       callerId: session.callerId,
       downloadBytes: session.downloadBytes,
       uploadBytes: session.uploadBytes,
-      source: 'agent',
-      lastUpdateAt: new Date(),
+      lastUpdateAt: sampledAt,
     });
     online += 1;
   }
 
-  const offlineMarked = await markMissingSessionsOffline(activeUsernames, tenantId);
+  const activeSet = new Set(activeUsernames);
+  let offline = 0;
+  for (const username of [...new Set(secretUsernames.map(normalizeUsername).filter(Boolean))]) {
+    if (activeSet.has(username)) continue;
+    await upsertPppoeLiveSnapshot({
+      ...safeContext,
+      source: context.source,
+      pppoeUsername: username,
+      status: 'offline',
+      currentIp: null,
+      uptime: null,
+      service: 'pppoe',
+      callerId: null,
+      downloadBytes: 0,
+      uploadBytes: 0,
+      downloadMbps: 0,
+      uploadMbps: 0,
+      lastUpdateAt: sampledAt,
+    });
+    offline += 1;
+  }
+
+  const offlineMarked = await markMissingSessionsOffline(activeUsernames, {
+    ...safeContext,
+    source: context.source,
+  });
   return {
-    tenantId: String(tenantId),
     online,
+    offline,
     offlineMarked,
     totalRead: Array.isArray(sessions) ? sessions.length : 0,
-    syncedAt: new Date().toISOString(),
+    totalSecrets: new Set(secretUsernames.map(normalizeUsername).filter(Boolean)).size,
+    syncedAt: sampledAt.toISOString(),
+  };
+}
+
+async function syncMikrotikPppoeSnapshotsForConcentrator(concentrator) {
+  if (!concentrator?._id) throw new Error('Concentrador invalido para sincronizacao PPPoE.');
+  const state = await getPppoeStateFromConcentrator(concentrator);
+  const result = await syncSessions(state.activeSessions, {
+    tenantId: String(concentrator.tenantId),
+    concentratorId: concentrator._id,
+    concentratorName: concentrator.name,
+    agentNodeId: concentrator.agentNodeId,
+    source: 'mikrotik',
+  }, state.secretUsernames);
+  return {
+    ...result,
+    concentratorId: String(concentrator._id),
+    concentratorName: concentrator.name,
+    agentNodeId: concentrator.agentNodeId ? String(concentrator.agentNodeId) : null,
+  };
+}
+
+async function syncAgentPppoeSnapshots(sessions = [], concentrator) {
+  if (!concentrator?._id) throw new Error('Concentrador ausente para snapshot PPPoE do agente.');
+  return {
+    tenantId: String(concentrator.tenantId),
+    ...(await syncSessions(sessions, {
+      tenantId: String(concentrator.tenantId),
+      concentratorId: concentrator._id,
+      concentratorName: concentrator.name,
+      agentNodeId: concentrator.agentNodeId,
+      source: 'agent',
+    })),
+    concentratorId: String(concentrator._id),
+    concentratorName: concentrator.name,
   };
 }
 
 module.exports = {
+  assertPppoeSnapshotIndexes,
   upsertPppoeLiveSnapshot,
   markMissingSessionsOffline,
-  syncMikrotikPppoeSnapshots,
+  syncMikrotikPppoeSnapshotsForConcentrator,
   syncAgentPppoeSnapshots,
+  syncSessions,
 };
