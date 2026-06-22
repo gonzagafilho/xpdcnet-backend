@@ -10,6 +10,8 @@ router.post('/', clientController.create);
 router.get('/', clientController.list);
 router.get('/summary', clientController.summary);
 router.get('/export.csv', clientController.exportCsv);
+router.patch('/status/bulk', clientController.updateStatusBulk);
+router.patch('/:id/status', clientController.updateStatus);
 router.get('/:id/accesses', clientController.listAccesses);
 router.get('/:id/operational-details', clientController.operationalDetails);
 router.get('/:id/network-intent', clientController.getNetworkIntent);

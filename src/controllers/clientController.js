@@ -1,6 +1,7 @@
 const clientService = require('../services/clientService');
 const clientAccessService = require('../services/clientAccessService');
 const clientOperationalService = require('../services/clientOperationalService');
+const clientStatusService = require('../services/clientStatusService');
 
 exports.create = async (req, res, next) => {
   try {
@@ -44,6 +45,32 @@ exports.exportCsv = async (req, res, next) => {
 exports.operationalDetails = async (req, res, next) => {
   try {
     res.json(await clientOperationalService.details(req.tenant._id.toString(), req.params.id));
+  } catch (err) {
+    next(err);
+  }
+};
+
+exports.updateStatus = async (req, res, next) => {
+  try {
+    const result = await clientStatusService.updateOne(
+      req.tenant._id.toString(),
+      req.params.id,
+      req.body?.status,
+    );
+    res.json(result);
+  } catch (err) {
+    next(err);
+  }
+};
+
+exports.updateStatusBulk = async (req, res, next) => {
+  try {
+    const result = await clientStatusService.updateMany(
+      req.tenant._id.toString(),
+      req.body?.clientIds,
+      req.body?.status,
+    );
+    res.json(result);
   } catch (err) {
     next(err);
   }
